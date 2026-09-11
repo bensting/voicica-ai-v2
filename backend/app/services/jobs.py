@@ -7,7 +7,9 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.models import Asset, CreditHold, Job
 from app.providers.base import JobRef
@@ -50,6 +52,12 @@ async def submit_tts(
         job.status = job_ref.status
         job.provider_state = job_ref.provider_state
 
+    # Commit explicitly here rather than relying solely on get_db()'s
+    # post-yield commit: a client that immediately polls GET /jobs/{id} right
+    # after this response must see the committed row, not a race against
+    # request-teardown timing. (get_db()'s own commit becomes a harmless
+    # no-op on top of this.)
+    await db.commit()
     return job
 
 
@@ -84,7 +92,11 @@ async def _complete_success(
     job.status = "succeeded"
     job.actual_cost = actual_cost
     job.completed_at = datetime.now(UTC)
-    job.output = {"asset_url": asset_fields.get("url"), "reference_id": output.get("reference_id")}
+    # A relative path the client fetches through us (with its normal auth
+    # header), not a raw R2 URL — see assets.download_bytes for why presigned
+    # URLs aren't used here.
+    asset_url = f"/jobs/{job.id}/asset" if asset_fields else None
+    job.output = {"asset_url": asset_url, "reference_id": output.get("reference_id")}
 
 
 async def _complete_failure(
@@ -102,6 +114,19 @@ async def get_job(db: AsyncSession, job_id: uuid.UUID, *, user_id: str) -> Job |
     nothing to poll yet. An async provider's poll would call `provider.poll()`
     here and advance the row before returning it; not needed until Kie."""
     job = await db.get(Job, job_id)
+    if job is None or job.user_id != user_id:
+        return None
+    return job
+
+
+async def get_job_with_asset(db: AsyncSession, job_id: uuid.UUID, *, user_id: str) -> Job | None:
+    """Same as `get_job`, but with `.asset` eagerly loaded (selectinload) —
+    for `GET /jobs/{id}/asset`, which needs the R2 key. `db.get()`'s default
+    lazy relationship access isn't awaitable outside an explicit loader in an
+    async session, hence the separate query shape rather than reusing `get_job`."""
+    job = (
+        await db.execute(select(Job).options(selectinload(Job.asset)).where(Job.id == job_id))
+    ).scalar_one_or_none()
     if job is None or job.user_id != user_id:
         return None
     return job

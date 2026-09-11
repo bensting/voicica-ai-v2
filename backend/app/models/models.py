@@ -7,7 +7,14 @@ timestamptz in UTC, money/credits as integers, no soft-delete by default.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func
+
+# Every timestamp column is timestamptz (docs/data-model.md "Conventions": UTC
+# always) — SQLAlchemy's `datetime` type annotation alone maps to a *naive*
+# DateTime, which silently mismatches a tz-aware Python value at the driver
+# level (asyncpg then refuses to bind it). Every datetime column below is
+# explicit about `DateTime(timezone=True)` because of that, not by habit.
+_TZ = DateTime(timezone=True)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -26,7 +33,7 @@ class User(Base):
     id: Mapped[str] = mapped_column(String(128), primary_key=True)  # Firebase UID, not a UUID we generate
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     role: Mapped[str] = mapped_column(String(16), default="user")  # user | staff | admin
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(_TZ, server_default=func.now())
 
     wallet: Mapped["CreditWallet"] = relationship(back_populates="user", uselist=False)
 
@@ -40,7 +47,7 @@ class CreditWallet(Base):
     id: Mapped[uuid.UUID] = _uuid_pk()
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), unique=True)
     balance: Mapped[int] = mapped_column(Integer, default=0)
-    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+    updated_at: Mapped[datetime] = mapped_column(_TZ, server_default=func.now(), onupdate=func.now())
 
     user: Mapped["User"] = relationship(back_populates="wallet")
 
@@ -55,7 +62,7 @@ class CreditTransaction(Base):
     type: Mapped[str] = mapped_column(String(16))  # topup | hold | settle | release
     amount: Mapped[int] = mapped_column(Integer)  # signed
     job_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("jobs.id"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(_TZ, server_default=func.now())
 
 
 class Job(Base):
@@ -86,9 +93,9 @@ class Job(Base):
     voice_model_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)  # reserved, ADR 0009 (not in this slice)
     visibility: Mapped[str] = mapped_column(String(8), default="private")  # private | public (ADR 0010)
 
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
-    completed_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(_TZ, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(_TZ, server_default=func.now(), onupdate=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(_TZ, nullable=True)
 
     asset: Mapped["Asset | None"] = relationship(back_populates="job", uselist=False)
 
@@ -104,8 +111,8 @@ class CreditHold(Base):
     job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("jobs.id"), unique=True)
     amount: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(16), default="active")  # active | settled | released
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
-    resolved_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(_TZ, server_default=func.now())
+    resolved_at: Mapped[datetime | None] = mapped_column(_TZ, nullable=True)
 
 
 class Asset(Base):
@@ -118,8 +125,8 @@ class Asset(Base):
     job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("jobs.id"), unique=True)
     r2_key: Mapped[str] = mapped_column(String(512))
     mirror_status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|done|failed
-    mirrored_at: Mapped[datetime | None] = mapped_column(nullable=True)
-    expires_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    mirrored_at: Mapped[datetime | None] = mapped_column(_TZ, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(_TZ, nullable=True)
 
     job: Mapped["Job"] = relationship(back_populates="asset")
 
@@ -133,5 +140,5 @@ class AppSetting(Base):
 
     key: Mapped[str] = mapped_column(String(128), primary_key=True)
     value: Mapped[dict] = mapped_column(JSONB)
-    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+    updated_at: Mapped[datetime] = mapped_column(_TZ, server_default=func.now(), onupdate=func.now())
     updated_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)

@@ -13,8 +13,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # Database (ADR 0006)
+    # Database (ADR 0006). Neon (and most managed Postgres) requires TLS; a
+    # local Docker Postgres for dev doesn't have it configured at all — hence
+    # this being a separate, explicit switch rather than inferred from the URL.
     database_url: str = "postgresql+asyncpg://voicica:voicica@localhost:5432/voicica"
+    database_ssl_require: bool = False
 
     # Auth (ADR 0008) — Firebase Admin SDK service account, as a path to the JSON
     # key file or the JSON itself. core/auth.py is the only place that reads this.

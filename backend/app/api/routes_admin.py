@@ -47,6 +47,7 @@ async def grant_credits(
         raise APIError(status_code=404, code="not_found", message="No such user.")
 
     await credits.topup(db, user_id=user_id, amount=body.amount, updated_by=admin.id)
+    await db.commit()  # see the comment in services/jobs.py submit_tts — same reasoning
     balance = await credits.available_balance(db, user_id)
     return MeResponse(id=user.id, email=user.email, role=user.role, balance=balance)
 
@@ -78,4 +79,5 @@ async def update_setting(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     row = await app_settings.set_setting(db, key, body.value, updated_by=admin.id)
+    await db.commit()  # see the comment in services/jobs.py submit_tts — same reasoning
     return {"key": row.key, "value": body.value}

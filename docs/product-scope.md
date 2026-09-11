@@ -8,6 +8,8 @@ This document defines *what* the platform does and for *whom*, before `architect
 
 **Why this is the moat, specifically:** every provider behind this platform (Azure, Google, Fish Audio, Kie) is a B2B/developer-facing API, not a consumer product — raw, unfriendly, not designed for an end consumer to use directly. The product's entire value-add is packaging these into a polished, easy, fast consumer experience. Ease-of-use isn't a nice-to-have on top of the "real" product (the AI capabilities) — it *is* the product, since the underlying models are commodity access to the same handful of vendors any competitor can also call.
 
+**Target market: Thai, Indonesian, and Spanish speakers** — not primarily English/Chinese. This is a deliberate departure from the prior project's i18n (en/zh-CN/zh-TW); that locale *content* doesn't carry over (only its switching-infrastructure pattern might, if it's still fit for purpose). It also means there is no single infrastructure region close to every target market — Thai/Indonesian cluster in Southeast Asia, Spanish spans Latin America/Spain/US-Hispanic (which one is still open). Current call: **default to Asia-Pacific** (serves the Thai+Indonesian majority) for Neon and R2, accept worse latency for Spanish-speaking users for now rather than take on multi-region complexity with no traffic yet to justify it. Revisit once there's real usage data, or once a primary/first-launch market among the three is picked.
+
 ## 1. Capability matrix
 
 | Capability | Modality | Provider(s) | Provider's native call shape | Auth required | Billing unit | Status |

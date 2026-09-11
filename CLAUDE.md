@@ -71,24 +71,28 @@ backend/
 - 前端 Next.js 15 (App Router) + TypeScript + Tailwind + Firebase Auth
 - 后端 FastAPI + Firebase Admin SDK
 - Prisma + Neon (Postgres)
-- 双版本管理机制（Web 版本 / 原生 App 版本）、PWA 更新机制、i18n（en / zh-CN / zh-TW）等
+- 双版本管理机制（Web 版本 / 原生 App 版本）、PWA 更新机制、i18n 切换机制（语言内容是 en / zh-CN / zh-TW）等
 
-这些老项目里跑通的模式（认证流程、i18n 方案、版本管理脚本等）可以按需搬过来，但**目录结构和业务逻辑组织方式要按新项目的规则重新设计**，不要整体照搬。
+这些老项目里跑通的模式（认证流程、版本管理脚本等）可以按需搬过来，但**目录结构和业务逻辑组织方式要按新项目的规则重新设计**，不要整体照搬。**i18n 尤其要注意**：新项目目标市场是泰语/印尼语/西语（见 `docs/product-scope.md` §0），跟老项目的 en/zh-CN/zh-TW 完全不重合——能抄的只是"怎么做语言切换"这套工程机制，语言内容要整个重做，不是简单加几个语言包。
 
 ## 当前状态
 
-**Backend TTS 切片代码已写完**（`backend/`，FastAPI + SQLAlchemy async + Alembic，venv 已建、依赖已装、ruff 检查通过、app 能正常 import）。实现了 provider 适配层（`base.py`/`fish_audio.py`/`registry.py`）、Job/积分/app_settings 的 ORM 模型 + 首个 migration（含 seed 数据）、`POST /generate/tts` → `GET /jobs/{id}`/`GET /jobs` → `PATCH /jobs/{id}`（公开）→ `GET /me` → `/admin/*`（调积分/看任务/读写 settings）全套接口，统一错误格式 `{error:{code,message}}`。细节和怎么跑起来见 `backend/README.md`。
+**TTS 垂直切片端到端跑通了，backend + frontend/web 都有，而且是在真实浏览器里对着真实基础设施（Neon/Firebase/Fish Audio/R2）验证过的，没有一层是 mock**：注册（Firebase 邮箱密码/Google 都开着）→ 自动建号发 500 积分 → 提交 TTS → 真调 Fish Audio 合成 → 音频通过后端代理真的能播放 → 标记公开 → 积分正确扣减、历史记录/公开状态都对得上。细节和怎么跑起来分别见 `backend/README.md`、`frontend/web/README.md`。
 
-**还没做/没法做的**：因为本地环境没有 Docker/Postgres，没法起 DB 跑 migration 做端到端联调；Firebase/Fish Audio/R2 的真实 key 用户还没给，所以这些集成代码写了但没实测过。`frontend/web` 还没动。
+**外部账号/凭证现状**：Neon（库 `voicica-ai-v2`，亚太/美东）、Firebase（复用老项目 `ai-voice-labs-473713`，前端 Web SDK config 在 `frontend/web/.env.local.example`，后端 service account JSON 在根目录 `secrets/firebase-adminsdk.json`——这个文件夹整体 gitignore，只留 README 说明用途）、Fish Audio、R2（桶 `voicica-v2`）都已配置并实测通过。
 
-骨架目录（`frontend/{web,admin}`、`android/`）还是空的,尚未安装依赖、尚未写代码。文档体系：根 `README.md`、`docs/product-scope.md`（业务范围/能力矩阵）、`docs/architecture.md`、`docs/data-model.md`（数据库 schema，含约定：UUID 主键/snake_case/timestamptz/积分用整数）、`docs/api-contract.md`（后端 HTTP 接口清单）、`docs/flows.md`（全部流程清单+完成度）、`docs/decisions/`（0001-0010）、`CONTRIBUTING.md`。后续代码落地时按"文档策略"同步维护，不要另起一套。
+**踩过的坑，已经修了、也写进了对应 README 当"约定"（别再犯）**：
+- **时间戳必须显式 `DateTime(timezone=True)`**——迁移是 `timestamptz`，ORM 模型不声明会在写入 tz-aware 值时崩溃（`backend/app/models/models.py` 的 `_TZ` 常量）。
+- **写接口必须显式 `await db.commit()`**，不能只靠 `get_db()` 兜底——这套 FastAPI/Starlette 版本下，生成器依赖的 post-yield commit 可能晚于响应发出，导致"提交成功但立刻查询查不到"（真实复现过）。
+- **R2 预签名 URL 在这版 `botocore` 下会被拒**（"Missing x-amz-content-sha256"）——改成后端自己读 R2 转发（`GET /jobs/{id}/asset`），不暴露裸 R2 URL。
+- Neon 连接串的 `sslmode=require`/`channel_binding=require` 参数 asyncpg 不认，改用 `DATABASE_SSL_REQUIRE` 开关处理。
 
-已定（ADR 0001-0010，见 `docs/decisions/`）：Kie 能力模型、异步 Job 契约、积分账本、素材持久化、前端四端拆分、数据库选型（Postgres + SQLAlchemy/SQLModel）、Fish Audio 接入（TTS 同步；语音克隆两段式）、Provider 语音/模型目录同步策略（定期同步，见 ADR 0007）+ 卡住任务的兜底扫描、Auth = Firebase Auth（大陆不是目标市场）、**语音克隆是可复用声音资产**（`voice_models` 表，训练本身就是一个普通 job，复用现成的 job+积分机制，见 ADR 0009）、**作品库 = `jobs.visibility` 字段**（不是独立内容系统，浏览不需要登录，见 ADR 0010）。`docs/flows.md` 里列了全部流程的状态（19 条，8 已定义），持续更新，别让它过期。
+**目标市场：泰语、印尼语、西班牙语**（不是英文/中文），老项目 en/zh-CN/zh-TW 的语言内容不能直接复用。基础设施 region 暂定亚太（泰语+印尼语覆盖东南亚，西语用户延迟暂不是最优,等有真实流量再考虑多区域）。已记入 `docs/product-scope.md` §0。
 
-明确暂缓、不阻塞写代码的细节：作品库的审核方式、公开作品的素材保留期是否要独立于普通过期策略（ADR 0010 open items）；Admin 具体功能列表；具体计费数字；充值支付渠道。
+**文档体系**：根 `README.md`、`docs/product-scope.md`、`docs/architecture.md`、`docs/data-model.md`、`docs/api-contract.md`、`docs/flows.md`、`docs/decisions/`（0001-0012）、`CONTRIBUTING.md`，加上 `backend/README.md`、`frontend/web/README.md` 这两份"怎么跑起来 + 踩过的坑"。代码落地按"文档策略"同步维护。
 
-架构级的悬而未决项全部清空了，包括前端框架（Next.js，ADR 0011）。
+**已定（ADR 0001-0012）**：provider 适配层、异步 Job 契约、积分账本（冻结→结算/释放）、素材持久化到 R2、前端四端拆分、数据库选型、Fish Audio 接入、provider 目录同步策略、Auth = Firebase Auth、语音克隆是可复用资产、作品库 = 可见性字段、前端框架 Next.js、`app_settings` 配置模式。`docs/flows.md` 持续更新，别让它过期。
 
-下一步：不做纯前端原型也不做纯后端，做一条**完整垂直切片**（登录 → 提交 Fish Audio TTS → 轮询 → 拿到结果，前后端全串起来），选 Fish Audio TTS 是因为它是已核实过的最简单同步接口，能最快验证 provider 适配层 + Job 模型 + 积分扣费全链路跑得通，且能实际验证 `docs/api-contract.md` 写得对不对。Web 优先于 Android（迭代快，且 Android 原生投入应该等 UX/API 契约先被验证过一轮）。高保真设计稿已发布（Artifact，TTS 流程 6 屏），参考老项目 `(native)` 视觉语言。
+**明确暂缓、不阻塞往下做的**：`(marketing)` 展示页、语音选择器（没有 voice catalog 接口）、公开作品库浏览页（`/gallery` 接口没做）、Android、真实支付、Admin 网页界面（现在只有三个受保护接口）、作品库审核方式、具体计费数字。
 
-这条切片的落地范围已经收敛完（见 ADR 0012）：**配置分三类**——工程结构类（Kie 目录）先文件后数据库；provider 自己的目录（语音列表）从第一天就是同步表；**简单运营数值（计费费率、注册赠送积分）从第一天就是 `app_settings` 表**，不用等"真需要"才搬数据库，因为这类值本来就该不用发版就能改。计费费率/注册积分具体数字先填占位值，随时能调,不阻塞开发。Admin 这条切片只做"手动调积分 + 看任务列表 + 读写 app_settings"三个接口，先不建 `frontend/admin` 网页。外部账号（Firebase/Fish Audio/R2）用户稍后提供。
+**下一步候选**（还没定，看用户想先做哪个）：① 接 Azure/Google 第二个 provider，验证 fallback/多 provider 场景；② 把 Kie 的图片/视频接进来，验证真正的异步 Job 路径（目前只验证过 Fish Audio 这种"伪同步"路径）；③ 补 `/gallery` 端点 + 展示页；④ Android。

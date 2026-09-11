@@ -4,7 +4,7 @@ A unified backend platform for AI-generated content — text-to-speech, voice cl
 
 This is a ground-up rewrite of an earlier prototype. The rewrite exists because the original grew organically until its structure and its third-party integrations were tangled together; this version separates them from day one.
 
-> **Status: early-stage.** The architecture below is decided; implementation is in progress. See [`docs/architecture.md`](docs/architecture.md) for the full design and [`docs/decisions/`](docs/decisions/README.md) for the reasoning behind each major choice.
+> **Status: early-stage, first slice running end-to-end.** Text-to-speech (via Fish Audio) works all the way through — sign up, generate, play back, mark public — verified in a real browser against real infrastructure (Neon, Firebase, Fish Audio, Cloudflare R2), not mocked. Azure/Google/Kie, voice cloning, and Android aren't built yet. See [`docs/architecture.md`](docs/architecture.md) for the full design and [`docs/decisions/`](docs/decisions/README.md) for the reasoning behind each major choice.
 
 ## Architecture at a glance
 
@@ -69,4 +69,9 @@ Everything beyond this landing page lives in [`docs/`](docs/README.md):
 
 ## Getting started
 
-No runnable code yet — this section will be filled in once the backend skeleton exists.
+```
+backend/README.md        # FastAPI setup — Postgres, Firebase Admin SDK, Fish Audio, R2
+frontend/web/README.md   # Next.js setup — Firebase web config, points at the backend
+```
+
+Both need real third-party credentials to run (see those READMEs for exactly which). `frontend/admin` and `android/` aren't started.

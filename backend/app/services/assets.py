@@ -53,11 +53,27 @@ async def upload_bytes(
     await run_in_threadpool(_put)
 
     now = datetime.now(UTC)
-    url = f"{settings.r2_public_base_url.rstrip('/')}/{key}" if settings.r2_public_base_url else None
     return {
         "r2_key": key,
         "mirror_status": "done",
         "mirrored_at": now,
         "expires_at": now + timedelta(days=_DEFAULT_RETENTION_DAYS),
-        "url": url,
     }
+
+
+async def download_bytes(r2_key: str) -> tuple[bytes, str]:
+    """Fetches an object's bytes + content-type from R2, for the backend to
+    hand to a client itself (`GET /jobs/{id}/asset`) rather than a presigned
+    URL: a recent botocore/R2 incompatibility makes presigned GET URLs from
+    this environment reject with "Missing x-amz-content-sha256" — they
+    require headers a plain `<audio src>`/browser fetch can't attach, which
+    defeats the point of presigning. Proxying is the fallback that's actually
+    verified working; revisit presigned URLs once that's resolved upstream."""
+    settings = get_settings()
+
+    def _get() -> tuple[bytes, str]:
+        client = _r2_client()
+        obj = client.get_object(Bucket=settings.r2_bucket, Key=r2_key)
+        return obj["Body"].read(), obj.get("ContentType", "application/octet-stream")
+
+    return await run_in_threadpool(_get)

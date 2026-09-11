@@ -39,6 +39,7 @@ Separate endpoints per capability (not one generic `POST /jobs`) so each gets it
 | `GET /jobs/{id}` | required, owner only | Poll one job to completion ([architecture.md §3b](architecture.md)) |
 | `GET /jobs` | required | Current user's job history, filterable by `capability`/`status` |
 | `PATCH /jobs/{id}` | required, owner only | `{ "visibility": "public" }` — the only field this can change ([ADR 0010](decisions/0010-public-gallery-visibility-flag.md)) |
+| `GET /jobs/{id}/asset` | required, owner only | Streams the job's generated file. A succeeded job's `output.asset_url` is a relative path to *this* endpoint, not a raw R2 URL — the backend proxies the bytes rather than presigning, because presigned R2 GET URLs from this environment's botocore reject with "Missing x-amz-content-sha256" (a real, verified incompatibility, not a config choice — see `services/assets.py`). Revisit if that gets resolved upstream; until a public gallery exists ([ADR 0010](decisions/0010-public-gallery-visibility-flag.md)), this stays owner-only like everything else here. |
 
 ### Voice models (persisted asset, [ADR 0009](decisions/0009-voice-cloning-reusable-asset.md))
 

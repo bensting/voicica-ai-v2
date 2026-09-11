@@ -15,7 +15,7 @@ copy .env.example .env                  # then fill in the values — see .env.e
 You'll need, at minimum, to get from outside this repo:
 
 - A **Postgres** database. Local dev, quickest path: `docker run -d --name voicica-db -e POSTGRES_USER=voicica -e POSTGRES_PASSWORD=voicica -e POSTGRES_DB=voicica -p 5432:5432 postgres:16` (matches `.env.example`'s default `DATABASE_URL`).
-- A **Firebase** project's service account key ([ADR 0008](../docs/decisions/0008-auth-provider.md)) — download it from the Firebase console, point `FIREBASE_CREDENTIALS_PATH` at the file.
+- A **Firebase** project's service account key ([ADR 0008](../docs/decisions/0008-auth-provider.md)) — download it from the Firebase console and save it as `../secrets/firebase-adminsdk.json` (see [`../secrets/README.md`](../secrets/README.md) — that whole folder is gitignored except its own README, on purpose, so real credentials have one findable, non-git home instead of scattering across Downloads). `.env`'s `FIREBASE_CREDENTIALS_PATH` already points there.
 - A **Fish Audio** API key from <https://fish.audio/app/api-keys/>.
 - A **Cloudflare R2** bucket + access key ([ADR 0004](../docs/decisions/0004-asset-mirroring-r2-retention.md)).
 
@@ -46,9 +46,16 @@ Then `GET http://localhost:8000/health` should return `{"status": "ok"}`, and `h
 
 Not implemented yet, by design (see [`docs/flows.md`](../docs/flows.md) for the full list): Azure/Google/Kie adapters, voice cloning ([ADR 0009](../docs/decisions/0009-voice-cloning-reusable-asset.md)), the scheduled-task module ([ADR 0007](../docs/decisions/0007-scheduled-tasks-module.md)), real payment top-up.
 
+Verified end-to-end against a real Neon database, Firebase project, Fish Audio account, and R2 bucket: sign in → submit a TTS job → real Fish Audio synthesis → real R2 upload → read the job back → mark it public → credits debited correctly.
+
+## Conventions (found the hard way — keep following them)
+
+- **Every timestamp column is `DateTime(timezone=True)`** in `models/models.py`, matching `timestamptz` in the migrations. Omitting it compiles fine but fails at runtime the first time a tz-aware Python `datetime` (i.e. anything from `datetime.now(UTC)`, which is the only correct way to build one here) gets bound to that column.
+- **Any route that writes data must `await db.commit()` explicitly before returning**, not rely on `get_db()`'s post-`yield` commit alone. In this FastAPI/Starlette combination, that generator-dependency cleanup can run *after* the response has already been sent — so a client that immediately re-reads what it just wrote (the normal "submit, then poll" pattern) can race the commit and see stale/missing data. Every existing write endpoint (`jobs.submit_tts`, `PATCH /jobs/{id}`, the `/admin/*` writes) already does this; keep the pattern for any new one.
+
 ## Tests / linting
 
 ```bash
 ruff check app migrations
-pytest   # none written yet — this slice hasn't been run against a live DB in this environment (no Docker/Postgres available here); write these once you can run migrations locally
+pytest   # none written yet
 ```

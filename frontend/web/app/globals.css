@@ -1,0 +1,68 @@
+@import "tailwindcss";
+
+/* Deliberately dark-only (matches the prior native app's always-dark shell,
+   docs/decisions/0011-frontend-framework.md's design reference) — not a
+   light/dark toggle, so tokens are declared once here, not split across a
+   prefers-color-scheme query. */
+:root {
+  --bg: #0a0a1a;
+  --surface: #1a1b26;
+  --surface-2: #20212f;
+  --sheet: #121320;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-soft: rgba(255, 255, 255, 0.05);
+  --text: #f4f3f7;
+  --text-2: #9a9cb0;
+  --text-3: #65667c;
+  --a1: #8b5cf6;
+  --a2: #a855f7;
+  --a3: #d946ef;
+  --a4: #ec4899;
+  --a5: #f97316;
+  --danger: #ef4444;
+  --success: #22c58b;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-sheet: var(--sheet);
+  --color-border: var(--border);
+  --color-border-soft: var(--border-soft);
+  --color-text: var(--text);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-a1: var(--a1);
+  --color-a2: var(--a2);
+  --color-a3: var(--a3);
+  --color-a4: var(--a4);
+  --color-a5: var(--a5);
+  --color-danger: var(--danger);
+  --color-success: var(--success);
+  --font-display: var(--font-bricolage), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-hanken), ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.grad-bg {
+  background: linear-gradient(
+    90deg,
+    var(--a1) 0%,
+    var(--a2) 25%,
+    var(--a3) 50%,
+    var(--a4) 75%,
+    var(--a5) 100%
+  );
+}
+
+.grad-text {
+  background: linear-gradient(90deg, var(--a1), var(--a3), var(--a5));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
