@@ -49,3 +49,4 @@ What this makes easier, what it makes harder, what it locks in.
 | [0010](0010-public-gallery-visibility-flag.md) | Public gallery is a visibility flag, not a separate content system | Accepted |
 | [0011](0011-frontend-framework.md) | Frontend framework — Next.js | Accepted |
 | [0012](0012-app-settings-table.md) | Simple tunable values live in `app_settings`, not config files | Accepted |
+| [0013](0013-i18n-routing-strategy.md) | i18n routing — locale-prefixed URLs for marketing, cookie for the app | Accepted |

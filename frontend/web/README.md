@@ -18,6 +18,7 @@ The Firebase web config in `.env.local.example` is already filled in — it's me
 
 - `lib/firebase.ts` / `lib/auth-context.tsx` — Firebase Auth (email/password + Google, both enabled on the shared Firebase project), exposed via `useAuth()`.
 - `lib/api.ts` — the one place that calls the backend: attaches the Firebase ID token, unwraps `docs/api-contract.md`'s `{"error": {code, message}}` envelope into a typed `ApiError`.
+- `lib/locale.ts` — `(app)`'s locale preference, a cookie not a URL segment ([ADR 0013](../../docs/decisions/0013-i18n-routing-strategy.md)).
 - `app/login/` — sign in / sign up.
 - `app/page.tsx` — root placeholder: redirects to `/app` (signed in) or `/login` (signed out). Temporary until `(marketing)` exists.
 - `app/(app)/app/` — everything behind login (ADR 0005), served at `/app`: `layout.tsx` (one level up, `app/(app)/layout.tsx`) gates on Firebase auth state and renders the bottom nav; `page.tsx` is Home (a "your creations" list — no separate wallet card, the header's credits pill already shows balance, a duplicate card was cut on review); `create/tts/` is the TTS flow (submit → inline result with playback + the public/private toggle); `me/` is the profile + full history.
@@ -32,6 +33,6 @@ Signed up a real account through the actual browser UI, submitted a real TTS job
 
 ## Not built yet
 
-`(marketing)` route group, voice picker (no voice catalog endpoint exists server-side yet), the public gallery page (no `/gallery` endpoint yet — ADR 0010's mechanism is done backend-side, browsing isn't wired up), Android, real payment top-up (the "Top up" button doesn't do anything yet), a top-left settings/language drawer (agreed direction, not built).
+`(marketing)` route group, voice picker (no voice catalog endpoint exists server-side yet), the public gallery page (no `/gallery` endpoint yet — ADR 0010's mechanism is done backend-side, browsing isn't wired up), Android, real payment top-up (the "Top up" button doesn't do anything yet), a top-left settings/language drawer (agreed direction, not built — this is what will eventually call `lib/locale.ts`'s `setLocale()`).
 
-**Open decision, blocking i18n:** locale-prefixed URLs (`/th/app/...`) vs. cookie/localStorage-stored locale with no URL prefix — asked, not yet answered. `lib/api.ts`'s `getMenu()` hardcodes `locale="en"` pending this; don't wire `next-intl` until it's settled.
+**i18n routing** ([ADR 0013](../../docs/decisions/0013-i18n-routing-strategy.md)): `(marketing)` will use locale-prefixed URLs once it exists; `(app)` uses a plain cookie (`lib/locale.ts`'s `getLocale()`/`setLocale()`) — already wired into `CreateSheet`'s `GET /config/menu` call, just nothing writes the cookie yet since the language switcher isn't built.

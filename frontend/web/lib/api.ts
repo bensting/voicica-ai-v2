@@ -77,9 +77,9 @@ export interface MenuItem {
 export const api = {
   me: () => request<MeResponse>("/me"),
 
-  /** locale hardcoded to "en" until the i18n routing strategy is decided —
-   * wire this to the active locale then (lib/api.ts is the only place that
-   * needs to change). */
+  /** Defaults to "en"; callers on the (app) surface should pass
+   * `getLocale()` from lib/locale.ts (ADR 0013) instead of relying on this
+   * default. */
   getMenu: (locale: string = "en") =>
     request<MenuItem[]>(`/config/menu?locale=${encodeURIComponent(locale)}`),
 

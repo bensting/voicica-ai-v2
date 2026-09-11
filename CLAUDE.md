@@ -99,8 +99,8 @@ backend/
 
 **Logo/图标资产复用了老项目的**（用户明确要求："logo相关的就复用老项目的，老项目的logo不错"）：`frontend/web/public/brand/` 下的 `mark.webp`/`mark-512.webp`（图腾鸟标）、`credits-token.png`（积分徽章），已经接进 Home 页头部、登录页、积分 pill。
 
-**明确暂缓、不阻塞往下做的**：`(marketing)` 展示页、语音选择器（没有 voice catalog 接口）、公开作品库浏览页（`/gallery` 接口没做）、Android、真实支付、Admin 网页界面（现在只有受保护接口，无 UI；菜单管理已有全套 CRUD 接口可以随时接 UI）、作品库审核方式、具体计费数字、左上角设置/语言抽屉（方向已定——左上角，不是右上角——还没实现）。
+**i18n 路由策略已定**（[ADR 0013](docs/decisions/0013-i18n-routing-strategy.md)）：按 surface 拆开，不是全站统一一种方案——`(marketing)` 用 locale 前缀 URL（`/th/...`、`/id/...`、`/es/...`，SEO 需要可被搜索引擎按语言收录）；`(app)` 用 cookie 存 locale，不带 URL 前缀（登录后页面不会被爬虫看到，没必要）。已经把 `frontend/web/lib/locale.ts`（`getLocale`/`setLocale`）接进 `CreateSheet` 的 `GET /config/menu` 调用，去掉了之前的硬编码 `locale="en"`——目前还没有 UI 写这个 cookie（左上角抽屉没做），所以实际效果还是都读到 "en" 默认值，但管线已经通了。
 
-**还没答的问题，问了好几次了**：i18n 到底走 locale 前缀 URL（`/th/app/...`）还是 cookie/localStorage 存 locale 不带 URL 前缀——这个卡住了接 `next-intl` 和 `api.getMenu()` 里硬编码的 `locale="en"`。
+**明确暂缓、不阻塞往下做的**：`(marketing)` 展示页、语音选择器（没有 voice catalog 接口）、公开作品库浏览页（`/gallery` 接口没做）、Android、真实支付、Admin 网页界面（现在只有受保护接口，无 UI；菜单管理已有全套 CRUD 接口可以随时接 UI）、作品库审核方式、具体计费数字、左上角设置/语言抽屉（方向已定——左上角，不是右上角，且会写 `lib/locale.ts` 的 cookie——还没实现）。
 
-**下一步候选**（还没定，看用户想先做哪个）：① 接 Azure/Google 第二个 provider，验证 fallback/多 provider 场景；② 把 Kie 的图片/视频接进来，验证真正的异步 Job 路径（目前只验证过 Fish Audio 这种"伪同步"路径）；③ 补 `/gallery` 端点 + 展示页；④ Android；⑤ 回答 i18n URL 策略问题，接上左上角抽屉。
+**下一步候选**（还没定，看用户想先做哪个）：① 接 Azure/Google 第二个 provider，验证 fallback/多 provider 场景；② 把 Kie 的图片/视频接进来，验证真正的异步 Job 路径（目前只验证过 Fish Audio 这种"伪同步"路径）；③ 补 `/gallery` 端点 + 展示页；④ Android；⑤ 做左上角抽屉（语言切换 + 设置入口）。

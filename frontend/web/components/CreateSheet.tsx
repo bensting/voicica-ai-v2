@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api, type MenuItem } from "@/lib/api";
+import { getLocale } from "@/lib/locale";
 import { MenuIcon } from "./icons";
 
 /** The "+" button's sheet — every item, in every language, comes from the
@@ -13,7 +14,7 @@ export function CreateSheet({ isOpen, onClose }: { isOpen: boolean; onClose: () 
 
   useEffect(() => {
     if (isOpen && items === null) {
-      api.getMenu().then(setItems).catch(() => setItems([]));
+      api.getMenu(getLocale()).then(setItems).catch(() => setItems([]));
     }
   }, [isOpen, items]);
 
