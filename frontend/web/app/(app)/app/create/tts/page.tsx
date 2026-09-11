@@ -24,11 +24,14 @@ export default function CreateTtsPage() {
   const [audioSheetOpen, setAudioSheetOpen] = useState(false);
 
   async function handleGenerate() {
-    if (!text.trim()) return;
+    // A voice is required — Fish Audio isn't a general fallback, it's
+    // reserved for a user's own cloned voices (a separate, not-yet-built
+    // slice), so there's no sensible default to fall back to silently.
+    if (!text.trim() || !voice) return;
     setSubmitting(true);
     setError(null);
     try {
-      const result = await api.submitTts(text.trim(), voice?.id, audioSettings);
+      const result = await api.submitTts(text.trim(), voice.id, audioSettings);
       setJob(result);
       if (result.status === "failed") {
         setError(result.error ?? "Generation failed.");
@@ -98,7 +101,7 @@ export default function CreateTtsPage() {
               {voice ? friendlyVoiceName(voice) : "Select a voice"}
             </div>
             <div className="mt-0.5 truncate text-[11.5px] text-text-2">
-              {voice ? localeDisplayName(voice.locale) : "Default voice"}
+              {voice ? localeDisplayName(voice.locale) : "Required"}
             </div>
           </div>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" className="shrink-0">
@@ -146,7 +149,7 @@ export default function CreateTtsPage() {
       <div className="fixed bottom-16 left-0 right-0 px-4 pb-4 pt-3" style={{ background: "linear-gradient(0deg, var(--bg) 65%, transparent)" }}>
         <button
           onClick={handleGenerate}
-          disabled={submitting || !text.trim()}
+          disabled={submitting || !text.trim() || !voice}
           className="grad-bg flex w-full items-center justify-center gap-2 rounded-2xl py-3.5 text-sm font-semibold text-[#120a1c] disabled:opacity-50"
         >
           {submitting ? (

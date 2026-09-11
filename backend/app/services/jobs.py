@@ -24,7 +24,7 @@ async def submit_tts(
     *,
     user_id: str,
     text: str,
-    voice_id: uuid.UUID | None,
+    voice_id: uuid.UUID,
     speed: float = 1.0,
     volume: int = 50,
     pitch: int = 50,
@@ -35,10 +35,13 @@ async def submit_tts(
 
     Which provider gets called is decided by the voice, not the capability:
     a voice_catalog row carries its own provider + provider_voice_id + locale
-    (docs/data-model.md), so picking a voice IS picking a provider. No
-    voice_id means the "no voice selected" default — fish_audio, which is
-    the only provider in this slice with a sensible default voice of its own
-    (Azure/Google both require an explicit voice — see their adapters).
+    (docs/data-model.md), so picking a voice IS picking a provider.
+    `voice_id` is required — Fish Audio isn't a general "no voice selected"
+    fallback, it's reserved for a user's own cloned voices (ADR 0009, not
+    yet built); there is no product-sensible default voice to fall back to
+    without one (an earlier version of this defaulted to Fish Audio's own
+    generic voice, which had nothing to do with what the picker actually
+    offers — schemas.TTSRequest.voice_id has no default for the same reason).
 
     speed/volume/pitch use one provider-agnostic scale (schemas.TTSRequest:
     speed 0.5-2.0x, volume/pitch 1-100 centered on 50) passed through to
@@ -62,17 +65,12 @@ async def submit_tts(
         relative scale)."""
     estimated_cost = await credits.estimate_tts_cost(db, text)
 
-    provider_name = "fish_audio"
-    provider_voice_id: str | None = None
-    locale: str | None = None
-
-    if voice_id is not None:
-        voice = await voice_catalog_service.get_voice(db, voice_id)
-        if voice is None:
-            raise ValueError(f"Unknown voice_id={voice_id!r}")
-        provider_name = voice.provider
-        provider_voice_id = voice.provider_voice_id
-        locale = voice.locale
+    voice = await voice_catalog_service.get_voice(db, voice_id)
+    if voice is None:
+        raise ValueError(f"Unknown voice_id={voice_id!r}")
+    provider_name = voice.provider
+    provider_voice_id = voice.provider_voice_id
+    locale = voice.locale
 
     job = Job(
         user_id=user_id,
@@ -81,7 +79,7 @@ async def submit_tts(
         status="pending",
         input={
             "text": text,
-            "voice_id": str(voice_id) if voice_id else None,
+            "voice_id": str(voice_id),
             "speed": speed,
             "volume": volume,
             "pitch": pitch,
@@ -95,11 +93,14 @@ async def submit_tts(
     job.hold_id = credit_hold.id
 
     provider = get_provider_by_name(provider_name)
-    provider_inputs: dict[str, Any] = {"text": text, "speed": speed, "volume": volume, "pitch": pitch}
-    if provider_voice_id:
-        provider_inputs["provider_voice_id"] = provider_voice_id
-    if locale:
-        provider_inputs["locale"] = locale
+    provider_inputs: dict[str, Any] = {
+        "text": text,
+        "speed": speed,
+        "volume": volume,
+        "pitch": pitch,
+        "provider_voice_id": provider_voice_id,
+        "locale": locale,
+    }
     job_ref: JobRef = await provider.submit("tts", provider_inputs)
 
     if job_ref.status == "succeeded":
@@ -107,8 +108,9 @@ async def submit_tts(
     elif job_ref.status == "failed":
         await _complete_failure(db, job=job, credit_hold=credit_hold, error=job_ref.error)
     else:
-        # Fish Audio never returns pending/processing — this branch exists because
-        # the interface (ADR 0002) is shared with async providers (Kie, later).
+        # Azure/Google never return pending/processing — this branch exists
+        # because the interface (ADR 0002) is shared with async providers
+        # (Kie, later; Fish Audio too, once voice cloning training exists).
         job.status = job_ref.status
         job.provider_state = job_ref.provider_state
 
@@ -170,9 +172,10 @@ async def _complete_failure(
 
 async def get_job(db: AsyncSession, job_id: uuid.UUID, *, user_id: str) -> Job | None:
     """Read a job's current state. For this slice every job is already
-    terminal by the time it's written (Fish Audio is synchronous) — there's
-    nothing to poll yet. An async provider's poll would call `provider.poll()`
-    here and advance the row before returning it; not needed until Kie."""
+    terminal by the time it's written (Azure/Google are both synchronous) —
+    there's nothing to poll yet. An async provider's poll would call
+    `provider.poll()` here and advance the row before returning it; not
+    needed until Kie."""
     job = await db.get(Job, job_id)
     if job is None or job.user_id != user_id:
         return None

@@ -23,10 +23,10 @@ class MeResponse(BaseModel):
 
 class TTSRequest(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
-    voice_id: uuid.UUID | None = Field(
-        default=None,
+    voice_id: uuid.UUID = Field(
         description="A voice_catalog row's id (GET /catalog/voices) — picking a voice picks the "
-        "provider it belongs to. Omit for the default voice (Fish Audio).",
+        "provider it belongs to. Required: Fish Audio is reserved for a user's own cloned "
+        "voices (ADR 0009, not yet built), not a general fallback, so there is no default voice.",
     )
     # Same 3-parameter, provider-agnostic scale for every provider (docs/api-contract.md):
     # speed 0.5-2.0x, volume/pitch 1-100 centered on 50. Each adapter converts to its own

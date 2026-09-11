@@ -108,10 +108,13 @@ export const api = {
 
   /** `audio` (speed/volume/pitch, lib/audio-settings.ts) is optional — the
    * backend defaults to 1.0/50/50 (a no-op on every provider) when omitted. */
-  submitTts: (text: string, voiceId?: string, audio?: { speed: number; volume: number; pitch: number }) =>
+  /** `voiceId` is required by the backend (schemas.TTSRequest) — Fish Audio
+   * isn't a general fallback (reserved for a user's own cloned voices,
+   * ADR 0009), so there's no default voice to omit this for. */
+  submitTts: (text: string, voiceId: string, audio?: { speed: number; volume: number; pitch: number }) =>
     request<JobResponse>("/generate/tts", {
       method: "POST",
-      body: JSON.stringify({ text, voice_id: voiceId ?? null, ...audio }),
+      body: JSON.stringify({ text, voice_id: voiceId, ...audio }),
     }),
 
   /** Every base language actually present in the catalog (83 across

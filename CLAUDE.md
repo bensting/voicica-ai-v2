@@ -130,4 +130,12 @@ backend/
 
 **明确暂缓、不阻塞往下做的**：`(marketing)` 展示页、语音选择器（没有 voice catalog 接口）、公开作品库浏览页（`/gallery` 接口没做）、Android、真实支付、Admin 网页界面（现在只有受保护接口，无 UI；菜单管理已有全套 CRUD 接口可以随时接 UI）、作品库审核方式、具体计费数字、抽屉里的实际设置项（语言切换等）。
 
-**下一步候选**（还没定，看用户想先做哪个）：① 声音试听——等真的要做，得先定是"正常走真实 TTS 扣积分"还是"搭一套样本预生成/缓存机制"，这是个真架构决策不是小事；② 把 Kie 的图片/视频接进来，验证真正的异步 Job 路径（目前只验证过同步 provider 路径）；③ 补 `/gallery` 端点 + 展示页；④ Android；⑤ 把抽屉内容做完（语言切换 + 设置项）。
+**产品方向澄清：Fish Audio 以后专门用于语音克隆（用户自己 clone 的声音），不再是选声音环节的"默认/兜底"选项**。之前 `submit_tts` 在没选声音时会默默用 Fish Audio 自己的通用默认声音——这跟"Fish Audio 专门给 clone 用"的定位不符（用户没选声音时不该悄悄给一个跟选择器里内容毫无关系的声音）。已经改成**选声音是必选项**：
+- 后端 `TTSRequest.voice_id` 从可选（`None` 默认走 fish_audio）改成必填，不传直接 422（走现有的 `{"error":{"code":"invalid_input",...}}` 统一错误格式，没有另开一条错误码）。`services/jobs.py submit_tts` 也去掉了整个"没选声音就用 fish_audio"的分支。
+- 前端"Select a voice"那一行没选时显示"Required"（原来是"Default voice"），"Generate speech"按钮在没选声音前保持禁用。
+- 真实验证过：不传 voice_id 现在确实 422；Azure（选了声音 + Volume 75%）、Google Chirp3 HD（选了声音 + Pitch 30，确认 pitch 不支持的自动重试从真实浏览器点击也能触发）都走完整浏览器流程验证过，成功。
+- Fish Audio 的 adapter 代码本身没删，只是这条路径现在走不到了——等语音克隆功能（ADR 0009，还没做）真正接入时会用到。
+
+**另外发现一个小插曲，跟"测试有没有做"这个问题有关**：用户看到页面上"Speed 1.5x"显示成默认值，觉得不合理，指出来了。查了一下——**代码里真正的默认值一直是 1.0x/50/50，没有 bug**，1.5x 是我上一轮测试时自己调完存的，因为 Audio Settings 是存 localStorage 的粘性偏好，而这次 session 里跑的 claude-in-chrome 是真实共享用户自己的 Chrome，所以我测试时写的值直接留在了用户会看到的浏览器里。已经用 `localStorage.removeItem("tts_audio_settings")` 清掉了。**以后凡是在真实浏览器里测试会改动 localStorage/cookie 一类持久化状态的功能，测完最好清理一下，不然用户下次打开会看到测试留下的痕迹，容易被误认成 bug。**
+
+**下一步候选**（还没定，看用户想先做哪个）：① 声音试听——等真的要做，得先定是"正常走真实 TTS 扣积分"还是"搭一套样本预生成/缓存机制"，这是个真架构决策不是小事；② 把 Kie 的图片/视频接进来，验证真正的异步 Job 路径（目前只验证过同步 provider 路径）；③ 补 `/gallery` 端点 + 展示页；④ Android；⑤ 把抽屉内容做完（语言切换 + 设置项）；⑥ 语音克隆（ADR 0009）——现在有了明确的产品定位（Fish Audio 专用），这也是让 Fish Audio 重新在产品里出现的方式。
