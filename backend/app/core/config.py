@@ -1,0 +1,41 @@
+"""Application settings.
+
+All secrets/environment-specific values come from env vars (see ../../.env.example).
+Nothing here is a business-tunable value — those live in `app_settings`
+(the database table, ADR 0012), read via `services.settings`, not here.
+"""
+
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    # Database (ADR 0006)
+    database_url: str = "postgresql+asyncpg://voicica:voicica@localhost:5432/voicica"
+
+    # Auth (ADR 0008) — Firebase Admin SDK service account, as a path to the JSON
+    # key file or the JSON itself. core/auth.py is the only place that reads this.
+    firebase_credentials_path: str | None = None
+    firebase_credentials_json: str | None = None
+
+    # Providers
+    fish_audio_api_key: str | None = None
+    fish_audio_base_url: str = "https://api.fish.audio"
+
+    # Asset storage (ADR 0004) — Cloudflare R2, S3-compatible.
+    r2_account_id: str | None = None
+    r2_access_key_id: str | None = None
+    r2_secret_access_key: str | None = None
+    r2_bucket: str = "voicica-assets"
+    r2_public_base_url: str | None = None  # e.g. a custom domain fronting the bucket
+
+    # CORS — frontend/web's origin(s) during local dev
+    cors_allow_origins: list[str] = ["http://localhost:3000"]
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

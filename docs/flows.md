@@ -1,0 +1,27 @@
+# Process / Flow Inventory
+
+Every distinct operational flow in the system, and how settled it is. This exists so nothing gets silently skipped — when in doubt about "did we cover this," check here first. Update a row's status the moment its flow moves; don't let this list go stale.
+
+| # | Flow | Status | Defined in |
+|---|---|---|---|
+| 1 | Submit a job (capability request → job created) | **Defined** | [ADR 0002](decisions/0002-unified-async-job-model.md), [architecture.md §3a/§3c](architecture.md) |
+| 2 | Poll a job to completion | **Defined** | [ADR 0002](decisions/0002-unified-async-job-model.md), [architecture.md §3b](architecture.md) |
+| 3 | Kie webhook callback | Partially defined — webhook-preferred + polling-fallback is decided, exact callback request/response contract isn't written | [architecture.md §3d](architecture.md) |
+| 4 | Credit hold → settle/release | **Defined** | [ADR 0003](decisions/0003-credit-ledger-hold-then-settle.md) |
+| 5 | Asset mirroring (provider URL → R2) | **Defined** | [ADR 0004](decisions/0004-asset-mirroring-r2-retention.md) |
+| 6 | Provider fallback (vendor A fails → vendor B for the same capability) | Partially defined — the registry owns it in principle ([architecture.md §2](architecture.md)), retry/trigger policy not written | [architecture.md §3](architecture.md) |
+| 7 | Content-policy rejection (Kie rejects on keywords) | Partially defined — folds into the normal `failed` status + no charge; distinct user-facing messaging not decided | [ADR 0002](decisions/0002-unified-async-job-model.md), [ADR 0003](decisions/0003-credit-ledger-hold-then-settle.md) |
+| 8 | Job-completion notification to frontend (polling vs. push) | Not started | Open item in [architecture.md §5](architecture.md) |
+| 9 | Auth verification (per-request identity check) | **Defined** (Firebase ID token via Admin SDK, behind a swappable `core/auth.py` interface) | [ADR 0008](decisions/0008-auth-provider.md) |
+| 10 | User first-login bootstrap (create local `users` row + wallet) | Partially defined — grants `app_settings.signup_bonus_credits` on creation ([ADR 0012](decisions/0012-app-settings-table.md)); exact bootstrap sequence not written | product-scope.md §2 |
+| 11 | Credit top-up (payment → credit grant) | Not started | Blocked on payment provider choice ([product-scope.md §2](product-scope.md)) |
+| 12 | Refund / dispute handling (payment refund → credit clawback) | Not started | — |
+| 13 | Asset-expiry warning in the history UI | Not started | Noted in [product-scope.md §3](product-scope.md) |
+| 14 | Admin operations (credit adjustment, user management, job monitoring, pricing/catalog edits) | Partially defined — minimal slice scope set (manual credit grant, job list, settings read/write via script, no UI yet — [api-contract.md](api-contract.md)); full feature list still deferred | [ADR 0005](decisions/0005-frontend-surfaces.md), [ADR 0012](decisions/0012-app-settings-table.md) |
+| 15 | Session/auth across the 3 client surfaces (web, admin, Android) | Partially defined — same Firebase Auth everywhere, admin gated by `users.role` ([ADR 0008](decisions/0008-auth-provider.md)); token refresh/session UX details not written | [ADR 0008](decisions/0008-auth-provider.md) |
+| 16 | Train a reusable voice model (its own job, capability `voice_model_training`) | **Defined** | [ADR 0009](decisions/0009-voice-cloning-reusable-asset.md) |
+| 17 | Periodic provider voice/model catalog sync | **Defined** (responsibility + rationale; exact frequency/endpoints per provider deferred to implementation) | [ADR 0007](decisions/0007-scheduled-tasks-module.md) |
+| 18 | Stuck-job sweep (timeout → failed, release hold) | **Defined** (responsibility; exact timeout threshold open) | [ADR 0007](decisions/0007-scheduled-tasks-module.md) |
+| 19 | Mark a job public / browse the public gallery | Partially defined — mechanism decided (`jobs.visibility` flag, unauthenticated browse); moderation and retention-exception specifics deferred | [ADR 0010](decisions/0010-public-gallery-visibility-flag.md) |
+
+**Summary**: 8 of 19 fully defined, 7 partially, 4 not started. None of the remaining rows block writing the backend skeleton (providers/registry/job submit+poll) — they block specific features (real top-up, a full admin UI, push notifications) that get built after the skeleton runs end-to-end.
