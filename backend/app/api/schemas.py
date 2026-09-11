@@ -43,6 +43,15 @@ class VoiceCatalogResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class LocaleOption(BaseModel):
+    """GET /catalog/locales — one selectable language for the voice picker's
+    dropdown, with how many voices it has (so the frontend never shows an
+    empty language)."""
+
+    locale: str
+    voice_count: int
+
+
 class JobResponse(BaseModel):
     id: uuid.UUID
     capability: str

@@ -1,25 +1,31 @@
 """Read/write access to `voice_catalog` (docs/data-model.md, ADR 0007) —
 a synced mirror of each provider's own voice list, never hand-edited.
 Written wholesale by app/scheduled/sync_catalog.py; read by GET
-/catalog/voices (the voice picker) and by services/jobs.py submit_tts
-(resolving a chosen voice to the provider + provider_voice_id to call).
+/catalog/voices and /catalog/locales (the voice picker) and by
+services/jobs.py submit_tts (resolving a chosen voice to the provider +
+provider_voice_id to call).
+
+An earlier version of this module defaulted GET /catalog/voices (no
+`locale` given) to only the th/id/es target market — reasoning: growth's
+region priority (product-scope.md §0) meant the picker shouldn't ship a
+multi-thousand-voice payload almost entirely made of languages nobody
+would pick. Wrong premise: real traffic (marketing, organic signups)
+speaks every language, including English — target market was ever only
+about infra region, not about which voices a user can choose. Fixed by
+NOT restricting availability at all, and instead keeping the payload
+small a different way: the picker fetches one language at a time
+(list_voices with an explicit `locale`, like the old project's
+useVoices() hook), never the whole catalog in one call. list_locales()
+exists so the picker's language dropdown can be populated without
+pulling every voice just to read off their locale field.
 """
 
 import uuid
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import VoiceCatalog
-
-# product-scope.md §0's target market. GET /catalog/voices with no explicit
-# `locale` scopes to these by default — the voice picker gets a ~270-voice
-# payload instead of the full multi-language catalog (2800+ rows, almost all
-# of it languages this product doesn't serve). Structural/product config
-# (ADR 0012's file-not-table category, not an ops-tunable scalar) — revisit
-# only if the target market itself changes. Pass an explicit `locale` to
-# bypass this (e.g. future admin tooling browsing the whole catalog).
-_TARGET_MARKET_LOCALE_PREFIXES = ("th", "id", "es")
 
 
 async def list_voices(
@@ -30,12 +36,20 @@ async def list_voices(
         query = query.where(VoiceCatalog.provider == provider)
     if locale:
         query = query.where(VoiceCatalog.locale == locale)
-    else:
-        query = query.where(
-            or_(*(VoiceCatalog.locale.like(f"{p}-%") for p in _TARGET_MARKET_LOCALE_PREFIXES))
-        )
     query = query.order_by(VoiceCatalog.locale, VoiceCatalog.display_name)
     return list((await db.execute(query)).scalars().all())
+
+
+async def list_locales(db: AsyncSession, *, provider: str | None = None) -> list[tuple[str, int]]:
+    """Distinct locales present in the catalog, with a voice count each —
+    cheap enough to populate a language dropdown without fetching every
+    voice just to read off `.locale` (list_voices does that part, lazily,
+    once a locale is picked)."""
+    query = select(VoiceCatalog.locale, func.count()).group_by(VoiceCatalog.locale)
+    if provider:
+        query = query.where(VoiceCatalog.provider == provider)
+    query = query.order_by(VoiceCatalog.locale)
+    return list((await db.execute(query)).all())
 
 
 async def get_voice(db: AsyncSession, voice_id: uuid.UUID) -> VoiceCatalog | None:

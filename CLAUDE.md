@@ -83,7 +83,13 @@ backend/
 
 **TTS 多供应商已经打通（Azure + Google，加上原有的 Fish Audio）**：这是这轮新加的最大一块。核心设计点——**选哪个供应商是由用户选的"声音"决定的，不是 capability 级别写死的**：`voice_catalog` 表（provider + provider_voice_id + locale，文档早就设计好了但之前没实现）存了每个供应商的真实声音列表，`POST /generate/tts` 的请求字段从裸的 `reference_id` 改成了 `voice_id`（一个 `voice_catalog` 行的 id），后端按这个 id 查出该用哪个 provider、调用哪个 adapter（`registry.get_provider_by_name`，新加的按名字查找，区别于原来按 capability 查找）。不选 voice 时还是走 Fish Audio 默认声音（Azure/Google 都没有"默认声音"这个概念，必须显式指定）。`app/scheduled/sync_catalog.py`（ADR 0007 提到但之前没写代码的目录）负责从 Azure/Google 真实 API 拉声音列表写进 `voice_catalog`，目前手动跑（`python -m app.scheduled.sync_catalog`），真实同步过一次：Azure 779 个声音、Google 2066 个声音，泰语/印尼语/西语覆盖都确认了。`GET /catalog/voices?provider=&locale=` 接口已经能查。Fish Audio 自己的"官方声音列表"接口还没验证过，先没接入 catalog（不影响它现有的 TTS 功能，只是选声音时列表里暂时没有它）。全链路（DB migration、真实 Azure/Google 合成、R2 落地、HTTP 路由层）都用真实基础设施验证过，包括默认 Fish Audio 路径在真实浏览器里回归测试过没坏。
 
-**前端 Select Voice 弹窗也做完并端到端验证过了**（`components/VoiceSheet.tsx`）：搜索 + 语言/性别/供应商筛选，数据源是后端已经按目标市场收窄过的 266 条声音（`GET /catalog/voices` 不传 locale 时默认只给 th/id/es，这个收窄逻辑在后端 `services/voice_catalog.py` 里，不是前端过滤全量再筛——避免选声音弹窗白白拉几千条用不上的多语言声音，符合"C端体验优先"）。语言名称显示（"es-MX" → "Spanish (Mexico)"）用浏览器原生 `Intl.DisplayNames` 现算，没建任何对照表；Google 声音没有人类可读名字（原始是 "th-TH-Chirp3-HD-Achernar" 这种），加了个 `friendlyVoiceName()` 纯展示层清理成 "Chirp3 HD Achernar"，不影响实际传给后端的 id。**试听按钮按用户要求直接不做**（用户原话：试听不能每次都重新生成，应该播放已生成好的样本，但现在没有这套缓存机制，所以先去掉）。真实浏览器里选了一个泰语 Google 声音（Chirp3 HD Achernar）生成成功、真实播放确认过。
+**前端 Select Voice 弹窗做完并端到端验证过了**（`components/VoiceSheet.tsx`），中途有一次真实的设计返工，记一下：
+
+- **第一版做错了**：`GET /catalog/voices` 不传 locale 时我让后端默认收窄成只给 th/id/es（"目标市场"）三种语言，理由是怕选声音弹窗一次性拉几千条用不上的声音、拖慢加载。用户看到弹窗里语言下拉只有这三种，指出这是错的——**"目标市场"这个词从一开始就是指基础设施 region 优先级（infra 该往哪个区域投入），不是说要限制用户能选哪些语言**。实际推广进来的用户什么语言都有，包括英文，必须让全部语言都能选。用户还提醒"看看老版怎么实现的"，去看了老项目 `src/components/native/create/voice/VoiceSelectorSheet.tsx` + `hooks/useVoices.ts`，发现老版的解法是：**不限制语言范围（Azure/Google 支持啥就全选得到），但一次只拉一种语言的声音列表**（选语言 → 只 fetch 那个 locale 的声音），用一个"常用语言"精选短列表（比如西班牙语只挑 es-ES 一个代表，不是把 20 个国家变体都摆出来）放在下拉最上面，其余全部语言塞进"All languages"。
+- **现在的做法**：后端去掉了目标市场收窄，`GET /catalog/voices?locale=` 老老实实按 locale 精确查（不传就是全量 2845 条，picker 不会这么用）；新加了 `GET /catalog/locales?provider=` 只返回"有哪些语言 + 每种几条"，给下拉菜单用，很轻；前端 `VoiceSheet.tsx` 选了语言才去 fetch 那个语言的声音（不会话一次性拉全量）。语言下拉「Popular」精选 15 个代表 locale（泰语/印尼语/西语排最前面，然后是英文和其他主流语言），「All languages」放剩下 143 个——实测总共 158 个不同 locale，跟 Azure/Google 真实支持的完全一致，没有阉割。
+- 语言名称显示（"es-MX" → "Spanish (Mexico)"）还是用浏览器原生 `Intl.DisplayNames` 现算，没建任何对照表（比老项目手写一张 150 条的语言表更省事，覆盖面还更全）；Google 声音没有人类可读名字（原始是 "th-TH-Chirp3-HD-Achernar" 这种），`friendlyVoiceName()` 纯展示层清理成 "Chirp3 HD Achernar"，不影响实际传给后端的 id。
+- **试听按钮按用户要求直接不做**（用户原话：试听不能每次都重新生成，应该播放已生成好的样本，但现在没有这套缓存机制，所以先去掉）。
+- 真实浏览器验证过两轮：泰语 Google 声音（Chirp3 HD Achernar）、西语墨西哥 Azure 声音（Beatriz）都真实生成、真实播放成功，语言下拉切换、"Popular"/"All languages"分组都对。
 
 **这轮踩的一个坑，写进 `backend/README.md` 的 Conventions 了，别忘了**：跑了很久的 `uvicorn --reload` 进程有时候不会捡起新加的文件（不只是改动已有文件），结果就是新路由/新字段悄悄没生效，`/health` 还正常，浏览器测试甚至"看起来通过"——因为 Pydantic 默认会忽略请求里的未知多余字段，新的 `voice_id` 字段被服务器忽略后请求退回旧代码的默认行为，表面上"成功"实际上根本没走新逻辑。**以后改了路由/字段但怀疑没生效，先 `curl localhost:8000/openapi.json` 确认新路由真的在里面，不确定就直接杀掉进程重启**，别急着怀疑代码写错了。
 
@@ -93,7 +99,7 @@ backend/
 - **R2 预签名 URL 在这版 `botocore` 下会被拒**（"Missing x-amz-content-sha256"）——改成后端自己读 R2 转发（`GET /jobs/{id}/asset`），不暴露裸 R2 URL。
 - Neon 连接串的 `sslmode=require`/`channel_binding=require` 参数 asyncpg 不认，改用 `DATABASE_SSL_REQUIRE` 开关处理。
 
-**目标市场：泰语、印尼语、西班牙语**（不是英文/中文），老项目 en/zh-CN/zh-TW 的语言内容不能直接复用。基础设施 region 暂定亚太（泰语+印尼语覆盖东南亚，西语用户延迟暂不是最优,等有真实流量再考虑多区域）。已记入 `docs/product-scope.md` §0。
+**目标市场：泰语、印尼语、西班牙语**（不是英文/中文），老项目 en/zh-CN/zh-TW 的语言内容不能直接复用。基础设施 region 暂定亚太（泰语+印尼语覆盖东南亚，西语用户延迟暂不是最优,等有真实流量再考虑多区域）。已记入 `docs/product-scope.md` §0。**注意范围**：这条是基础设施 region 优先级/UI 界面语言（i18n，ADR 0013）的决策，**不是"用户能选/能用哪些语言"的限制**——已经因为把这个和 TTS 声音选择弄混而做错过一次（选声音弹窗一开始被我限制成只给这三种语言，被用户纠正：推广进来的用户什么语言都有，包括英文，声音库不该收窄），别再犯。
 
 **文档体系**：根 `README.md`、`docs/product-scope.md`、`docs/architecture.md`、`docs/data-model.md`、`docs/api-contract.md`、`docs/flows.md`、`docs/decisions/`（0001-0012）、`CONTRIBUTING.md`，加上 `backend/README.md`、`frontend/web/README.md` 这两份"怎么跑起来 + 踩过的坑"。代码落地按"文档策略"同步维护。
 

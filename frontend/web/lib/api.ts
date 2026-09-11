@@ -75,8 +75,7 @@ export interface MenuItem {
 }
 
 /** GET /catalog/voices — one synced voice (ADR 0007). `id` is what
- * submitTts()'s voiceId param expects. No voice picker UI consumes this
- * yet — the type/call exist so the next round can build straight on top. */
+ * submitTts()'s voiceId param expects. Consumed by components/VoiceSheet.tsx. */
 export interface Voice {
   id: string;
   provider: "azure" | "google" | "fish_audio";
@@ -84,6 +83,14 @@ export interface Voice {
   display_name: string;
   gender: string | null;
   styles: string[] | null;
+}
+
+/** GET /catalog/locales — one selectable language, with how many voices it
+ * has. Populates the voice picker's language dropdown cheaply, without
+ * fetching every voice just to read off `.locale`. */
+export interface LocaleOption {
+  locale: string;
+  voice_count: number;
 }
 
 export const api = {
@@ -101,7 +108,15 @@ export const api = {
       body: JSON.stringify({ text, voice_id: voiceId ?? null }),
     }),
 
-  /** provider/locale both optional filters — e.g. getVoices("azure", "th-TH"). */
+  /** Every locale actually present in the catalog (158+ across Azure/Google
+   * — no target-market restriction, see backend/app/services/voice_catalog.py's
+   * module docstring for why). Cheap: counts, not full voice objects. */
+  getLocales: (provider?: string) =>
+    request<LocaleOption[]>(`/catalog/locales${provider ? `?provider=${encodeURIComponent(provider)}` : ""}`),
+
+  /** provider/locale both optional filters — e.g. getVoices("azure", "th-TH").
+   * Always pass a `locale` from the picker — the catalog is ~2800 voices
+   * across every language Azure/Google support, too much to fetch at once. */
   getVoices: (provider?: string, locale?: string) => {
     const params = new URLSearchParams();
     if (provider) params.set("provider", provider);

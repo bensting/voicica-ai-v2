@@ -1,14 +1,37 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { api, type Voice } from "@/lib/api";
+import { api, type LocaleOption, type Voice } from "@/lib/api";
+import { getLocale } from "@/lib/locale";
 import { friendlyVoiceName, localeDisplayName } from "@/lib/locale-names";
 
 const PROVIDER_LABELS: Record<string, string> = { azure: "Azure", google: "Google", fish_audio: "Fish Audio" };
 
-/** The "Select a voice" picker — GET /catalog/voices already comes back
- * scoped to the target market (services/voice_catalog.py), so this just
- * searches/filters what it's given; no locale allowlist duplicated here. */
+/** One representative locale per commonly-picked language, target market
+ * first — mirrors the prior project's POPULAR_LANGUAGES shortlist. Every
+ * other locale the catalog actually has (158+, all of Azure/Google's
+ * coverage — no target-market restriction, backend/README.md) still shows
+ * up below, under "All languages"; this only decides what's quick to reach. */
+const POPULAR_LOCALES = [
+  "th-TH", "id-ID", "es-ES", "es-MX", "en-US",
+  "zh-CN", "ja-JP", "ko-KR", "fr-FR", "de-DE",
+  "pt-BR", "ru-RU", "ar-SA", "hi-IN", "vi-VN",
+];
+
+/** lib/locale.ts's short app-locale cookie ("th") -> a representative
+ * BCP-47 voice locale ("th-TH") to preselect the picker with. */
+const APP_LOCALE_TO_VOICE_LOCALE: Record<string, string> = {
+  th: "th-TH",
+  id: "id-ID",
+  es: "es-ES",
+  en: "en-US",
+};
+
+/** The "Select a voice" picker — fetches one language's voices at a time
+ * (like the prior project's useVoices() hook), never the whole catalog:
+ * GET /catalog/voices covers every language Azure/Google support (2800+
+ * voices total), so loading it all up front would be exactly the latency
+ * cost the product's own speed priority argues against. */
 export function VoiceSheet({
   isOpen,
   onClose,
@@ -18,17 +41,52 @@ export function VoiceSheet({
   onClose: () => void;
   onSelect: (voice: Voice) => void;
 }) {
+  const [locales, setLocales] = useState<LocaleOption[] | null>(null);
+  const [selectedLocale, setSelectedLocale] = useState<string | null>(null);
   const [voices, setVoices] = useState<Voice[] | null>(null);
+  const [voicesLocale, setVoicesLocale] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [locale, setLocale] = useState("all");
   const [gender, setGender] = useState("all");
   const [provider, setProvider] = useState("all");
 
+  // Load the language list once, then pick a sensible starting locale.
   useEffect(() => {
-    if (isOpen && voices === null) {
-      api.getVoices().then(setVoices).catch(() => setVoices([]));
+    if (isOpen && locales === null) {
+      api.getLocales().then((options) => {
+        setLocales(options);
+        const codes = new Set(options.map((o) => o.locale));
+        const preferred = APP_LOCALE_TO_VOICE_LOCALE[getLocale()];
+        const fallback = POPULAR_LOCALES.find((l) => codes.has(l)) ?? options[0]?.locale;
+        setSelectedLocale((preferred && codes.has(preferred) ? preferred : fallback) ?? null);
+      }).catch(() => setLocales([]));
     }
-  }, [isOpen, voices]);
+  }, [isOpen, locales]);
+
+  // Fetch that locale's voices whenever it changes. voicesLocale (rather
+  // than resetting `voices` to null synchronously, which trips the
+  // set-state-in-effect lint rule) is how the render below knows a fetch
+  // for the current selection is still in flight.
+  useEffect(() => {
+    if (!selectedLocale) return;
+    let cancelled = false;
+    api
+      .getVoices(undefined, selectedLocale)
+      .then((result) => {
+        if (cancelled) return;
+        setVoices(result);
+        setVoicesLocale(selectedLocale);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setVoices([]);
+        setVoicesLocale(selectedLocale);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedLocale]);
+
+  const loadingVoices = selectedLocale !== null && voicesLocale !== selectedLocale;
 
   useEffect(() => {
     document.body.style.overflow = isOpen ? "hidden" : "";
@@ -37,10 +95,14 @@ export function VoiceSheet({
     };
   }, [isOpen]);
 
-  const locales = useMemo(() => {
-    if (!voices) return [];
-    return Array.from(new Set(voices.map((v) => v.locale))).sort();
-  }, [voices]);
+  const { popularOptions, otherOptions } = useMemo(() => {
+    if (!locales) return { popularOptions: [], otherOptions: [] };
+    const byCode = new Map(locales.map((o) => [o.locale, o]));
+    const popular = POPULAR_LOCALES.map((l) => byCode.get(l)).filter((o): o is LocaleOption => !!o);
+    const popularCodes = new Set(popular.map((o) => o.locale));
+    const other = locales.filter((o) => !popularCodes.has(o.locale));
+    return { popularOptions: popular, otherOptions: other };
+  }, [locales]);
 
   const providers = useMemo(() => {
     if (!voices) return [];
@@ -51,13 +113,12 @@ export function VoiceSheet({
     if (!voices) return [];
     const q = search.trim().toLowerCase();
     return voices.filter((v) => {
-      if (locale !== "all" && v.locale !== locale) return false;
       if (gender !== "all" && v.gender !== gender) return false;
       if (provider !== "all" && v.provider !== provider) return false;
       if (q && !friendlyVoiceName(v).toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [voices, search, locale, gender, provider]);
+  }, [voices, search, gender, provider]);
 
   if (!isOpen) return null;
 
@@ -95,19 +156,35 @@ export function VoiceSheet({
             </div>
           </div>
 
-          <div className="flex gap-2 overflow-x-auto px-4 pb-3">
+          <div className="px-4 pb-2">
             <select
-              value={locale}
-              onChange={(e) => setLocale(e.target.value)}
-              className="shrink-0 rounded-lg border border-border-soft bg-surface px-2.5 py-1.5 text-xs text-text"
+              value={selectedLocale ?? ""}
+              onChange={(e) => setSelectedLocale(e.target.value)}
+              disabled={!locales}
+              className="w-full rounded-xl border border-border-soft bg-surface px-3 py-2.5 text-sm text-text disabled:opacity-60"
             >
-              <option value="all">All languages</option>
-              {locales.map((l) => (
-                <option key={l} value={l}>
-                  {localeDisplayName(l)}
-                </option>
-              ))}
+              {popularOptions.length > 0 && (
+                <optgroup label="Popular">
+                  {popularOptions.map((o) => (
+                    <option key={o.locale} value={o.locale}>
+                      {localeDisplayName(o.locale)}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {otherOptions.length > 0 && (
+                <optgroup label="All languages">
+                  {otherOptions.map((o) => (
+                    <option key={o.locale} value={o.locale}>
+                      {localeDisplayName(o.locale)}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
+          </div>
+
+          <div className="flex gap-2 overflow-x-auto px-4 pb-3">
             <select
               value={gender}
               onChange={(e) => setGender(e.target.value)}
@@ -134,16 +211,16 @@ export function VoiceSheet({
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
-            {voices === null && (
+            {(locales === null || loadingVoices) && (
               <div className="flex justify-center py-10">
                 <div className="h-5 w-5 animate-spin rounded-full border-2 border-border-soft border-t-a3" />
               </div>
             )}
-            {voices && filtered.length === 0 && (
+            {!loadingVoices && voices && filtered.length === 0 && (
               <p className="py-10 text-center text-sm text-text-2">No voices match.</p>
             )}
             <div className="flex flex-col gap-1.5">
-              {filtered.map((v) => (
+              {!loadingVoices && filtered.map((v) => (
                 <button
                   key={v.id}
                   onClick={() => {
@@ -158,7 +235,7 @@ export function VoiceSheet({
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium">{friendlyVoiceName(v)}</div>
                     <div className="mt-0.5 truncate text-[11px] text-text-2">
-                      {localeDisplayName(v.locale)} · {v.gender ?? "—"} · {PROVIDER_LABELS[v.provider] ?? v.provider}
+                      {v.gender ?? "—"} · {PROVIDER_LABELS[v.provider] ?? v.provider}
                     </div>
                   </div>
                 </button>
