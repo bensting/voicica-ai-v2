@@ -28,6 +28,7 @@ async def submit_tts(
     speed: float = 1.0,
     volume: int = 50,
     pitch: int = 50,
+    visibility: str = "private",
 ) -> Job:
     """Submit a TTS job. Raises credits.InsufficientCreditsError before
     anything reaches a provider if the user can't afford the estimated cost;
@@ -85,6 +86,10 @@ async def submit_tts(
             "pitch": pitch,
         },
         estimated_cost=estimated_cost,
+        # ADR 0010: opt-in at creation time (in addition to PATCH /jobs/{id}
+        # afterward) — still gated on the job actually succeeding, same as
+        # the PATCH path (a failed job never gets a mirrored asset to show).
+        visibility=visibility if visibility == "public" else "private",
     )
     db.add(job)
     await db.flush()  # assigns job.id
@@ -186,10 +191,16 @@ async def get_job_with_asset(db: AsyncSession, job_id: uuid.UUID, *, user_id: st
     """Same as `get_job`, but with `.asset` eagerly loaded (selectinload) —
     for `GET /jobs/{id}/asset`, which needs the R2 key. `db.get()`'s default
     lazy relationship access isn't awaitable outside an explicit loader in an
-    async session, hence the separate query shape rather than reusing `get_job`."""
+    async session, hence the separate query shape rather than reusing `get_job`.
+
+    Unlike `get_job`, this allows a *public* job's asset through for any
+    logged-in user, not just the owner (ADR 0010 — gallery items are meant
+    to be played by other people; the caller here is still authenticated,
+    since Explore/gallery browsing lives behind the app's login for now, but
+    ownership specifically shouldn't gate a public job's audio)."""
     job = (
         await db.execute(select(Job).options(selectinload(Job.asset)).where(Job.id == job_id))
     ).scalar_one_or_none()
-    if job is None or job.user_id != user_id:
+    if job is None or (job.user_id != user_id and job.visibility != "public"):
         return None
     return job

@@ -65,6 +65,23 @@ export interface JobResponse {
   completed_at: string | null;
 }
 
+/** GET /gallery — one public creation (ADR 0010). Deliberately leaner than
+ * JobResponse: no cost/error/visibility fields, no creator identity —
+ * nothing a gallery viewer (possibly not the owner) needs. */
+export interface GalleryItem {
+  id: string;
+  capability: string;
+  provider: string;
+  input: { text: string };
+  output: { asset_url: string | null } | null;
+  created_at: string;
+}
+
+export interface GalleryPage {
+  items: GalleryItem[];
+  next_cursor: string | null;
+}
+
 export interface MenuItem {
   id: string;
   icon: string;
@@ -106,15 +123,20 @@ export const api = {
   getMenu: (locale: string = "en") =>
     request<MenuItem[]>(`/config/menu?locale=${encodeURIComponent(locale)}`),
 
-  /** `audio` (speed/volume/pitch, lib/audio-settings.ts) is optional — the
-   * backend defaults to 1.0/50/50 (a no-op on every provider) when omitted. */
   /** `voiceId` is required by the backend (schemas.TTSRequest) — Fish Audio
    * isn't a general fallback (reserved for a user's own cloned voices,
-   * ADR 0009), so there's no default voice to omit this for. */
-  submitTts: (text: string, voiceId: string, audio?: { speed: number; volume: number; pitch: number }) =>
+   * ADR 0009), so there's no default voice to omit this for. `options`
+   * (speed/volume/pitch, lib/audio-settings.ts — defaults to a no-op
+   * 1.0/50/50 when omitted; visibility — ADR 0010, defaults to "private")
+   * is otherwise optional. */
+  submitTts: (
+    text: string,
+    voiceId: string,
+    options?: { speed: number; volume: number; pitch: number; visibility?: "private" | "public" },
+  ) =>
     request<JobResponse>("/generate/tts", {
       method: "POST",
-      body: JSON.stringify({ text, voice_id: voiceId, ...audio }),
+      body: JSON.stringify({ text, voice_id: voiceId, ...options }),
     }),
 
   /** Every base language actually present in the catalog (83 across
@@ -141,6 +163,12 @@ export const api = {
   },
 
   listJobs: () => request<JobResponse[]>("/jobs"),
+
+  /** Public — no auth needed (ADR 0010), though every call here still
+   * carries a Bearer token since request() always attaches one when a user
+   * is signed in; the backend just doesn't require it for this route. */
+  getGallery: (cursor?: string) =>
+    request<GalleryPage>(`/gallery${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`),
 
   getJob: (id: string) => request<JobResponse>(`/jobs/${id}`),
 

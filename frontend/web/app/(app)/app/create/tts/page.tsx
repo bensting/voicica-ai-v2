@@ -22,6 +22,7 @@ export default function CreateTtsPage() {
   const [voiceSheetOpen, setVoiceSheetOpen] = useState(false);
   const { settings: audioSettings, updateSettings: updateAudioSettings } = useAudioSettings();
   const [audioSheetOpen, setAudioSheetOpen] = useState(false);
+  const [shareToExplore, setShareToExplore] = useState(false);
 
   async function handleGenerate() {
     // A voice is required — Fish Audio isn't a general fallback, it's
@@ -31,7 +32,10 @@ export default function CreateTtsPage() {
     setSubmitting(true);
     setError(null);
     try {
-      const result = await api.submitTts(text.trim(), voice.id, audioSettings);
+      const result = await api.submitTts(text.trim(), voice.id, {
+        ...audioSettings,
+        visibility: shareToExplore ? "public" : "private",
+      });
       setJob(result);
       if (result.status === "failed") {
         setError(result.error ?? "Generation failed.");
@@ -129,6 +133,30 @@ export default function CreateTtsPage() {
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" className="shrink-0">
             <path d="M9 18l6-6-6-6" />
           </svg>
+        </button>
+
+        <button
+          onClick={() => setShareToExplore((v) => !v)}
+          disabled={submitting}
+          className="mt-2.5 flex w-full items-center gap-3 rounded-2xl border border-border-soft bg-surface px-4 py-3.5 text-left disabled:opacity-60"
+        >
+          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[10px] bg-a3/15 text-a3">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <circle cx="12" cy="12" r="9" />
+              <line x1="3" y1="12" x2="21" y2="12" />
+              <path d="M12 3a15 15 0 010 18M12 3a15 15 0 000 18" />
+            </svg>
+          </div>
+          <div className="flex-1">
+            <div className="text-[13.5px] font-semibold">Share to Explore</div>
+            <div className="mt-px text-[11.5px] text-text-2">Visible to everyone, no login required to view</div>
+          </div>
+          <div className={`h-[26px] w-11 flex-shrink-0 rounded-full transition-colors ${shareToExplore ? "grad-bg" : "bg-surface-2 border border-border"}`}>
+            <div
+              className="h-[21px] w-[21px] rounded-full bg-white shadow transition-transform"
+              style={{ transform: shareToExplore ? "translate(20px, 2.5px)" : "translate(2.5px, 2.5px)" }}
+            />
+          </div>
         </button>
       </div>
 

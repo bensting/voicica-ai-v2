@@ -2,18 +2,69 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { api, type JobResponse } from "@/lib/api";
+import { useEffect, useRef, useState } from "react";
+import { api, type GalleryItem } from "@/lib/api";
 import { CreditsPill } from "@/components/CreditsPill";
 import { SettingsDrawer } from "@/components/SettingsDrawer";
 
+/** Home = "Explore" (the bottom nav's label for this tab) — the public
+ * gallery (ADR 0010), not the signed-in user's own history (that's
+ * `/app/me`). Two different things; showing "your creations" here was a
+ * mix-up caught in review — nothing in the data model changed, just which
+ * feed this page reads. */
 export default function HomePage() {
-  const [jobs, setJobs] = useState<JobResponse[] | null>(null);
+  const [items, setItems] = useState<GalleryItem[] | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [playingId, setPlayingId] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const blobUrlsRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
-    api.listJobs().then(setJobs).catch(() => setJobs([]));
+    api.getGallery().then((page) => setItems(page.items)).catch(() => setItems([]));
+    const audio = new Audio();
+    audioRef.current = audio;
+    const onEnded = () => setPlayingId(null);
+    audio.addEventListener("ended", onEnded);
+    const blobUrls = blobUrlsRef.current;
+    return () => {
+      audio.removeEventListener("ended", onEnded);
+      audio.pause();
+      blobUrls.forEach((url) => URL.revokeObjectURL(url));
+    };
   }, []);
+
+  async function togglePlay(item: GalleryItem) {
+    const audio = audioRef.current;
+    if (!audio || !item.output?.asset_url) return;
+
+    if (playingId === item.id) {
+      audio.pause();
+      setPlayingId(null);
+      return;
+    }
+
+    let url = blobUrlsRef.current.get(item.id);
+    if (!url) {
+      try {
+        url = await api.assetBlobUrl(item.output.asset_url);
+        blobUrlsRef.current.set(item.id, url);
+      } catch {
+        return;
+      }
+    }
+    audio.src = url;
+    audio.play().catch((e: DOMException) => {
+      // Switching tracks quickly aborts the previous play() promise
+      // (AbortError, "interrupted by a new load request") — expected, not a
+      // real failure, and by the time it rejects `playingId` may already
+      // have moved on to whatever was clicked next. Only clear it if it's
+      // still pointing at *this* item, so a superseded rejection can't
+      // clobber a newer selection.
+      if (e.name !== "AbortError") console.error("Playback failed:", e);
+      setPlayingId((current) => (current === item.id ? null : current));
+    });
+    setPlayingId(item.id);
+  }
 
   return (
     <div className="relative">
@@ -46,22 +97,22 @@ export default function HomePage() {
 
       <section className="relative px-5 pt-6">
         <div className="flex items-baseline justify-between">
-          <h2 className="font-display font-bold text-[15px]">Your creations</h2>
+          <h2 className="font-display font-bold text-[15px]">Explore</h2>
           <Link href="/app/create/tts" className="text-xs font-semibold text-a3">
             + New
           </Link>
         </div>
 
-        {jobs === null && (
+        {items === null && (
           <div className="mt-4 flex justify-center py-10">
             <div className="h-5 w-5 animate-spin rounded-full border-2 border-border-soft border-t-a3" />
           </div>
         )}
 
-        {jobs?.length === 0 && (
+        {items?.length === 0 && (
           <div className="mt-4 flex flex-col items-center gap-3 rounded-2xl border border-dashed border-border py-12 text-center">
             <p className="text-sm text-text-2 max-w-[220px]">
-              Nothing here yet — your first generation will show up in this list.
+              Nothing shared yet — be the first to publish a creation here.
             </p>
             <Link
               href="/app/create/tts"
@@ -73,8 +124,8 @@ export default function HomePage() {
         )}
 
         <div className="mt-3 flex flex-col gap-2">
-          {jobs?.map((job) => (
-            <JobRow key={job.id} job={job} />
+          {items?.map((item) => (
+            <GalleryRow key={item.id} item={item} playing={playingId === item.id} onToggle={() => togglePlay(item)} />
           ))}
         </div>
       </section>
@@ -82,31 +133,39 @@ export default function HomePage() {
   );
 }
 
-function JobRow({ job }: { job: JobResponse }) {
-  const statusStyle: Record<string, string> = {
-    succeeded: "text-success bg-success/10",
-    failed: "text-danger bg-danger/10",
-    pending: "text-a5 bg-a5/10",
-    processing: "text-a5 bg-a5/10",
-  };
-
+function GalleryRow({
+  item,
+  playing,
+  onToggle,
+}: {
+  item: GalleryItem;
+  playing: boolean;
+  onToggle: () => void;
+}) {
   return (
     <div className="flex items-center gap-3 rounded-2xl border border-border-soft bg-surface p-3">
-      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-surface-2 text-a3">
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
-          <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
-          <path d="M19 10v2a7 7 0 01-14 0v-2" />
-        </svg>
-      </div>
+      <button
+        onClick={onToggle}
+        aria-label={playing ? "Pause" : "Play"}
+        className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-surface-2 text-a3 active:bg-border-soft"
+      >
+        {playing ? (
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="6" y="4" width="4" height="16" />
+            <rect x="14" y="4" width="4" height="16" />
+          </svg>
+        ) : (
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M8 5v14l11-7z" />
+          </svg>
+        )}
+      </button>
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[13px] font-medium">{job.input.text}</div>
+        <div className="truncate text-[13px] font-medium">{item.input.text}</div>
         <div className="mt-0.5 text-[11px] text-text-2">
-          {job.provider} · {new Date(job.created_at).toLocaleString()}
+          {item.provider} · {new Date(item.created_at).toLocaleString()}
         </div>
       </div>
-      <span className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${statusStyle[job.status] ?? ""}`}>
-        {job.status}
-      </span>
     </div>
   );
 }

@@ -35,6 +35,11 @@ class TTSRequest(BaseModel):
     speed: float = Field(default=1.0, ge=0.5, le=2.0)
     volume: int = Field(default=50, ge=1, le=100)
     pitch: int = Field(default=50, ge=1, le=100)
+    # ADR 0010: opt-in, set explicitly — defaults to private like the column
+    # itself. Lets a user share at creation time instead of only after the
+    # fact via PATCH /jobs/{id} (which still exists, for changing your mind
+    # later — this doesn't replace it, just adds the earlier option).
+    visibility: str = Field(default="private", pattern="^(private|public)$")
 
 
 class VoiceCatalogResponse(BaseModel):
@@ -77,6 +82,32 @@ class JobResponse(BaseModel):
     completed_at: datetime | None
 
     model_config = {"from_attributes": True}
+
+
+class GalleryItemResponse(BaseModel):
+    """GET /gallery — one public creation (ADR 0010). Deliberately leaner
+    than JobResponse: no estimated_cost/actual_cost/error/visibility — those
+    are the owner's own business, not something a gallery viewer (possibly
+    not even the owner) needs. No creator identity either — ADR 0010 doesn't
+    call for attribution, keep it that way until actually asked for."""
+
+    id: uuid.UUID
+    capability: str
+    provider: str
+    input: dict[str, Any]
+    output: dict[str, Any] | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class GalleryPage(BaseModel):
+    """docs/api-contract.md "Conventions" — the standard cursor-pagination
+    envelope. `next_cursor` is the last item's created_at (ISO 8601);
+    pass it back as `?cursor=` for the next page, null when there isn't one."""
+
+    items: list[GalleryItemResponse]
+    next_cursor: str | None
 
 
 class CreditGrantRequest(BaseModel):

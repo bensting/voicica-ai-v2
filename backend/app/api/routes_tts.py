@@ -31,6 +31,7 @@ async def create_tts_job(
             speed=body.speed,
             volume=body.volume,
             pitch=body.pitch,
+            visibility=body.visibility,
         )
     except credits.InsufficientCreditsError as exc:
         raise APIError(
