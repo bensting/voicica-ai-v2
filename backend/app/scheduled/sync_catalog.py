@@ -41,7 +41,14 @@ def _google_rows(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "provider_voice_id": v["name"],
             # Google doesn't give a separate human-readable name — the voice
             # name itself (e.g. "en-US-Standard-C") is the only label it has.
-            "display_name": v["name"],
+            # locale is stored exactly as Google returns it (e.g. "cmn-CN",
+            # its own code for Mandarin) — this is also what gets sent back
+            # to Google as `languageCode` at generation time (providers/
+            # google.py), and Google's API rejects anything that doesn't
+            # match a voice's own code exactly (verified: "zh-CN" against a
+            # cmn-CN voice 400s). The cmn/zh grouping-for-browsing alias
+            # lives in services/voice_catalog.py instead, query-side only —
+            # never rewrite this field.
             "locale": v["languageCodes"][0],
             "gender": (v.get("ssmlGender") or "").lower() or None,
             "styles": None,
