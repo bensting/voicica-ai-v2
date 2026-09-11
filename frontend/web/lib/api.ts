@@ -55,8 +55,8 @@ export interface JobResponse {
   capability: string;
   provider: string;
   status: "pending" | "processing" | "succeeded" | "failed";
-  input: { text: string; reference_id: string | null };
-  output: { asset_url: string | null; reference_id: string | null } | null;
+  input: { text: string; voice_id: string | null };
+  output: { asset_url: string | null } | null;
   error: string | null;
   estimated_cost: number;
   actual_cost: number | null;
@@ -74,6 +74,18 @@ export interface MenuItem {
   description: string;
 }
 
+/** GET /catalog/voices — one synced voice (ADR 0007). `id` is what
+ * submitTts()'s voiceId param expects. No voice picker UI consumes this
+ * yet — the type/call exist so the next round can build straight on top. */
+export interface Voice {
+  id: string;
+  provider: "azure" | "google" | "fish_audio";
+  locale: string;
+  display_name: string;
+  gender: string | null;
+  styles: string[] | null;
+}
+
 export const api = {
   me: () => request<MeResponse>("/me"),
 
@@ -83,11 +95,20 @@ export const api = {
   getMenu: (locale: string = "en") =>
     request<MenuItem[]>(`/config/menu?locale=${encodeURIComponent(locale)}`),
 
-  submitTts: (text: string, referenceId?: string) =>
+  submitTts: (text: string, voiceId?: string) =>
     request<JobResponse>("/generate/tts", {
       method: "POST",
-      body: JSON.stringify({ text, reference_id: referenceId ?? null }),
+      body: JSON.stringify({ text, voice_id: voiceId ?? null }),
     }),
+
+  /** provider/locale both optional filters — e.g. getVoices("azure", "th-TH"). */
+  getVoices: (provider?: string, locale?: string) => {
+    const params = new URLSearchParams();
+    if (provider) params.set("provider", provider);
+    if (locale) params.set("locale", locale);
+    const qs = params.toString();
+    return request<Voice[]>(`/catalog/voices${qs ? `?${qs}` : ""}`);
+  },
 
   listJobs: () => request<JobResponse[]>("/jobs"),
 

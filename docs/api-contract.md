@@ -22,7 +22,7 @@ The backend's HTTP surface, consumed identically by `frontend/web`, `frontend/ad
 
 | Method & path | Auth | Purpose |
 |---|---|---|
-| `POST /generate/tts` | required | Text-to-speech — `voice_catalog` entry or an owned `voice_model_id` |
+| `POST /generate/tts` | required | Text-to-speech — `{text, voice_id}`. `voice_id` is a `GET /catalog/voices` row's id; omit it for the default voice (Fish Audio). Picking a voice picks the provider — Azure/Google/Fish Audio are routed to automatically based on which voice's `voice_id` was sent, never a separate provider field (architecture.md §3c). |
 | `POST /generate/image` | required | Kie image generation |
 | `POST /generate/music` | required | Kie music generation |
 | `POST /generate/video` | required | Kie video generation |
@@ -54,7 +54,7 @@ Separate endpoints per capability (not one generic `POST /jobs`) so each gets it
 
 | Method & path | Auth | Purpose |
 |---|---|---|
-| `GET /catalog/voices?provider=&locale=` | required | Synced Azure/Google/Fish Audio voice list (`voice_catalog`, [ADR 0007](decisions/0007-scheduled-tasks-module.md)) |
+| `GET /catalog/voices?provider=&locale=` | required | Synced voice list (`voice_catalog`, [ADR 0007](decisions/0007-scheduled-tasks-module.md)) — **Azure and Google implemented and verified** (779 + 2066 voices synced from their real APIs, including full th-TH/id-ID/es-* coverage); Fish Audio isn't in the catalog yet (no verified "official voices" list endpoint for it — see `backend/README.md`). Sync is manual for now (`python -m app.scheduled.sync_catalog`) — the actual scheduling mechanism is still ADR 0007's open item. |
 | `GET /catalog/kie-models?capability=` | required | Kie's curated model catalog + pricing ([ADR 0001](decisions/0001-provider-adapter-layer.md)) |
 
 Both required-auth for now by default consistency with everything else being gated — neither is sensitive data, so this is a soft call, easy to open up later if there's a reason to (e.g. showing the catalog on a marketing page).

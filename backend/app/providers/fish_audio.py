@@ -30,7 +30,11 @@ class FishAudioProvider(Provider):
 
     async def _synthesize(self, inputs: dict[str, Any]) -> JobRef:
         text = inputs["text"]
-        reference_id = inputs.get("reference_id")  # a voice_catalog entry or an owned voice model's provider id
+        # "provider_voice_id" is the uniform key every TTS adapter reads
+        # (services/jobs.py, resolved from a voice_catalog row or an owned
+        # voice model) — Fish Audio's own API just happens to call its
+        # version of this parameter "reference_id".
+        reference_id = inputs.get("provider_voice_id")
 
         payload: dict[str, Any] = {"text": text, "format": inputs.get("format", "mp3")}
         if reference_id:
@@ -53,9 +57,5 @@ class FishAudioProvider(Provider):
         content_type = response.headers.get("content-type", "audio/mpeg")
         return JobRef(
             status="succeeded",
-            output={
-                "audio_bytes": response.content,
-                "content_type": content_type,
-                "reference_id": reference_id,
-            },
+            output={"audio_bytes": response.content, "content_type": content_type},
         )

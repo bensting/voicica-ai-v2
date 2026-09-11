@@ -13,24 +13,45 @@ from sqlalchemy.orm import selectinload
 
 from app.models.models import Asset, CreditHold, Job
 from app.providers.base import JobRef
-from app.providers.registry import get_provider
+from app.providers.registry import get_provider_by_name
 from app.services import assets as assets_service
 from app.services import credits
+from app.services import voice_catalog as voice_catalog_service
 
 
 async def submit_tts(
-    db: AsyncSession, *, user_id: str, text: str, reference_id: str | None
+    db: AsyncSession, *, user_id: str, text: str, voice_id: uuid.UUID | None
 ) -> Job:
     """Submit a TTS job. Raises credits.InsufficientCreditsError before
-    anything reaches a provider if the user can't afford the estimated cost."""
+    anything reaches a provider if the user can't afford the estimated cost;
+    raises ValueError if voice_id doesn't match a known voice_catalog row.
+
+    Which provider gets called is decided by the voice, not the capability:
+    a voice_catalog row carries its own provider + provider_voice_id + locale
+    (docs/data-model.md), so picking a voice IS picking a provider. No
+    voice_id means the "no voice selected" default — fish_audio, which is
+    the only provider in this slice with a sensible default voice of its own
+    (Azure/Google both require an explicit voice — see their adapters)."""
     estimated_cost = await credits.estimate_tts_cost(db, text)
+
+    provider_name = "fish_audio"
+    provider_voice_id: str | None = None
+    locale: str | None = None
+
+    if voice_id is not None:
+        voice = await voice_catalog_service.get_voice(db, voice_id)
+        if voice is None:
+            raise ValueError(f"Unknown voice_id={voice_id!r}")
+        provider_name = voice.provider
+        provider_voice_id = voice.provider_voice_id
+        locale = voice.locale
 
     job = Job(
         user_id=user_id,
         capability="tts",
-        provider="fish_audio",
+        provider=provider_name,
         status="pending",
-        input={"text": text, "reference_id": reference_id},
+        input={"text": text, "voice_id": str(voice_id) if voice_id else None},
         estimated_cost=estimated_cost,
     )
     db.add(job)
@@ -39,8 +60,13 @@ async def submit_tts(
     credit_hold = await credits.hold(db, user_id=user_id, job_id=job.id, amount=estimated_cost)
     job.hold_id = credit_hold.id
 
-    provider = get_provider("tts")
-    job_ref: JobRef = await provider.submit("tts", {"text": text, "reference_id": reference_id})
+    provider = get_provider_by_name(provider_name)
+    provider_inputs: dict[str, Any] = {"text": text}
+    if provider_voice_id:
+        provider_inputs["provider_voice_id"] = provider_voice_id
+    if locale:
+        provider_inputs["locale"] = locale
+    job_ref: JobRef = await provider.submit("tts", provider_inputs)
 
     if job_ref.status == "succeeded":
         await _complete_success(db, job=job, credit_hold=credit_hold, job_ref=job_ref)
@@ -96,7 +122,7 @@ async def _complete_success(
     # header), not a raw R2 URL — see assets.download_bytes for why presigned
     # URLs aren't used here.
     asset_url = f"/jobs/{job.id}/asset" if asset_fields else None
-    job.output = {"asset_url": asset_url, "reference_id": output.get("reference_id")}
+    job.output = {"asset_url": asset_url}
 
 
 async def _complete_failure(

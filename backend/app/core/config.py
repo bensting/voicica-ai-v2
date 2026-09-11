@@ -28,6 +28,17 @@ class Settings(BaseSettings):
     fish_audio_api_key: str | None = None
     fish_audio_base_url: str = "https://api.fish.audio"
 
+    # Azure Speech (Cognitive Services) — key is scoped to one region; the
+    # endpoint itself is `https://{region}.tts.speech.microsoft.com/...`, so
+    # the region is required, not just an optional override.
+    azure_speech_key: str | None = None
+    azure_speech_region: str | None = None
+
+    # Google Cloud Text-to-Speech. An API key is enough for this API (unlike
+    # Firebase Admin, which needs a service account) — verified directly
+    # against texttospeech.googleapis.com.
+    google_tts_api_key: str | None = None
+
     # Asset storage (ADR 0004) — Cloudflare R2, S3-compatible.
     r2_account_id: str | None = None
     r2_access_key_id: str | None = None

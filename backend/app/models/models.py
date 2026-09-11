@@ -131,6 +131,27 @@ class Asset(Base):
     job: Mapped["Job"] = relationship(back_populates="asset")
 
 
+class VoiceCatalog(Base):
+    """A synced mirror of Azure/Google/Fish Audio's own voice lists
+    (docs/data-model.md, ADR 0007) — read-only from the backend's perspective,
+    overwritten wholesale on each sync run (app/scheduled/sync_catalog.py).
+    No FK from `jobs` — a job stores `provider`/`input.provider_voice_id`
+    directly (docs/data-model.md §"voice_catalog"), so this table can be
+    resynced/pruned independently of job history."""
+
+    __tablename__ = "voice_catalog"
+    __table_args__ = (Index("ix_voice_catalog_provider_locale", "provider", "locale"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    provider: Mapped[str] = mapped_column(String(32))  # azure | google | fish_audio
+    provider_voice_id: Mapped[str] = mapped_column(String(128))  # e.g. "th-TH-PremwadeeNeural"
+    locale: Mapped[str] = mapped_column(String(16))  # e.g. "th-TH"
+    display_name: Mapped[str] = mapped_column(String(128))
+    gender: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    styles: Mapped[list | None] = mapped_column(JSONB, nullable=True)  # supported emotions/styles, if any
+    synced_at: Mapped[datetime] = mapped_column(_TZ, server_default=func.now())
+
+
 class AppSetting(Base):
     """Generic key-value store for tunable scalars (ADR 0012) — e.g.
     signup_bonus_credits, tts_credits_per_10_chars. Read by any service that

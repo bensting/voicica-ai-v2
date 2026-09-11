@@ -23,9 +23,24 @@ class MeResponse(BaseModel):
 
 class TTSRequest(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
-    reference_id: str | None = Field(
-        default=None, description="A voice_catalog entry or an owned voice model's provider id"
+    voice_id: uuid.UUID | None = Field(
+        default=None,
+        description="A voice_catalog row's id (GET /catalog/voices) — picking a voice picks the "
+        "provider it belongs to. Omit for the default voice (Fish Audio).",
     )
+
+
+class VoiceCatalogResponse(BaseModel):
+    """GET /catalog/voices — one synced voice."""
+
+    id: uuid.UUID
+    provider: str
+    locale: str
+    display_name: str
+    gender: str | None
+    styles: list[str] | None
+
+    model_config = {"from_attributes": True}
 
 
 class JobResponse(BaseModel):

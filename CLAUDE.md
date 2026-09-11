@@ -79,7 +79,9 @@ backend/
 
 **TTS 垂直切片端到端跑通了，backend + frontend/web 都有，而且是在真实浏览器里对着真实基础设施（Neon/Firebase/Fish Audio/R2）验证过的，没有一层是 mock**：注册（Firebase 邮箱密码/Google 都开着）→ 自动建号发 500 积分 → 提交 TTS → 真调 Fish Audio 合成 → 音频通过后端代理真的能播放 → 标记公开 → 积分正确扣减、历史记录/公开状态都对得上。细节和怎么跑起来分别见 `backend/README.md`、`frontend/web/README.md`。
 
-**外部账号/凭证现状**：Neon（库 `voicica-ai-v2`，亚太/美东）、Firebase（复用老项目 `ai-voice-labs-473713`，前端 Web SDK config 在 `frontend/web/.env.local.example`，后端 service account JSON 在根目录 `secrets/firebase-adminsdk.json`——这个文件夹整体 gitignore，只留 README 说明用途）、Fish Audio、R2（桶 `voicica-v2`）都已配置并实测通过。
+**外部账号/凭证现状**：Neon（库 `voicica-ai-v2`，亚太/美东）、Firebase（复用老项目 `ai-voice-labs-473713`，前端 Web SDK config 在 `frontend/web/.env.local.example`，后端 service account JSON 在根目录 `secrets/firebase-adminsdk.json`——这个文件夹整体 gitignore，只留 README 说明用途）、Fish Audio、R2（桶 `voicica-v2`）、**Azure Speech（区域 `southeastasia`）、Google Cloud TTS（API key）** 都已配置并实测通过。
+
+**TTS 多供应商已经打通（Azure + Google，加上原有的 Fish Audio）**：这是这轮新加的最大一块。核心设计点——**选哪个供应商是由用户选的"声音"决定的，不是 capability 级别写死的**：`voice_catalog` 表（provider + provider_voice_id + locale，文档早就设计好了但之前没实现）存了每个供应商的真实声音列表，`POST /generate/tts` 的请求字段从裸的 `reference_id` 改成了 `voice_id`（一个 `voice_catalog` 行的 id），后端按这个 id 查出该用哪个 provider、调用哪个 adapter（`registry.get_provider_by_name`，新加的按名字查找，区别于原来按 capability 查找）。不选 voice 时还是走 Fish Audio 默认声音（Azure/Google 都没有"默认声音"这个概念，必须显式指定）。`app/scheduled/sync_catalog.py`（ADR 0007 提到但之前没写代码的目录）负责从 Azure/Google 真实 API 拉声音列表写进 `voice_catalog`，目前手动跑（`python -m app.scheduled.sync_catalog`），真实同步过一次：Azure 779 个声音、Google 2066 个声音，泰语/印尼语/西语覆盖都确认了。`GET /catalog/voices?provider=&locale=` 接口已经能查。Fish Audio 自己的"官方声音列表"接口还没验证过，先没接入 catalog（不影响它现有的 TTS 功能，只是选声音时列表里暂时没有它）。全链路（DB migration、真实 Azure/Google 合成、R2 落地、HTTP 路由层）都用真实基础设施验证过，包括默认 Fish Audio 路径在真实浏览器里回归测试过没坏。**前端目前还没有"选声音"的 UI**——`lib/api.ts` 已经加了 `getVoices()`/`Voice` 类型，但 Select Voice 弹窗（老项目截图那个搜索+筛选+试听的样式）还没做，是下一步。
 
 **踩过的坑，已经修了、也写进了对应 README 当"约定"（别再犯）**：
 - **时间戳必须显式 `DateTime(timezone=True)`**——迁移是 `timestamptz`，ORM 模型不声明会在写入 tz-aware 值时崩溃（`backend/app/models/models.py` 的 `_TZ` 常量）。
@@ -91,7 +93,7 @@ backend/
 
 **文档体系**：根 `README.md`、`docs/product-scope.md`、`docs/architecture.md`、`docs/data-model.md`、`docs/api-contract.md`、`docs/flows.md`、`docs/decisions/`（0001-0012）、`CONTRIBUTING.md`，加上 `backend/README.md`、`frontend/web/README.md` 这两份"怎么跑起来 + 踩过的坑"。代码落地按"文档策略"同步维护。
 
-**已定（ADR 0001-0012）**：provider 适配层、异步 Job 契约、积分账本（冻结→结算/释放）、素材持久化到 R2、前端四端拆分、数据库选型、Fish Audio 接入、provider 目录同步策略、Auth = Firebase Auth、语音克隆是可复用资产、作品库 = 可见性字段、前端框架 Next.js、`app_settings` 配置模式。`docs/flows.md` 持续更新，别让它过期。
+**已定（ADR 0001-0013）**：provider 适配层、异步 Job 契约、积分账本（冻结→结算/释放）、素材持久化到 R2、前端四端拆分、数据库选型、Fish Audio 接入、provider 目录同步策略、Auth = Firebase Auth、语音克隆是可复用资产、作品库 = 可见性字段、前端框架 Next.js、`app_settings` 配置模式、i18n 路由策略（marketing 前缀 URL / app cookie）。`docs/flows.md` 持续更新，别让它过期。
 
 **能力菜单（"+"号弹出的那个 bottom sheet）已经做完并端到端验证过**：完全后端驱动，前端零业务配置（明确原则："我希望前端基本上没有任何配置，要轻"）——`GET /config/menu?locale=` 按 locale 解析好返回给客户端，`/admin/menu` 一套 CRUD（增删改查单条，不是裸 JSON blob PATCH，避免多语言结构数据被误改坏）；数据存在 `app_settings` 的一行 JSON（`capability_menu` key），这是 ADR 0012 配置分类里新加的第四类"结构化多条目、需要后台可编辑"的用法。前端唯一保留的本地配置是一张图标 key → SVG 的小对照表（`frontend/web/components/icons.tsx`，用户明确认可的唯一例外）。目前 5 个能力里只有 Text to Voice 是 `enabled`，其余 4 个（Dialogue/Image/BG Remove/Video Download）种子数据里存在但禁用，等各自后端切片。详见 `docs/api-contract.md`"Capability menu"节、`backend/app/services/menu.py`。
 
@@ -105,4 +107,4 @@ backend/
 
 **明确暂缓、不阻塞往下做的**：`(marketing)` 展示页、语音选择器（没有 voice catalog 接口）、公开作品库浏览页（`/gallery` 接口没做）、Android、真实支付、Admin 网页界面（现在只有受保护接口，无 UI；菜单管理已有全套 CRUD 接口可以随时接 UI）、作品库审核方式、具体计费数字、抽屉里的实际设置项（语言切换等）。
 
-**下一步候选**（还没定，看用户想先做哪个）：① 接 Azure/Google 第二个 provider，验证 fallback/多 provider 场景；② 把 Kie 的图片/视频接进来，验证真正的异步 Job 路径（目前只验证过 Fish Audio 这种"伪同步"路径）；③ 补 `/gallery` 端点 + 展示页；④ Android；⑤ 把抽屉内容做完（语言切换 + 设置项）。
+**下一步候选**（还没定，看用户想先做哪个）：① 前端 Select Voice 弹窗（老项目截图那个搜索+语言筛选+试听样式），对接已经打通的 `GET /catalog/voices`——这是多供应商 TTS 这轮最自然的下一步；② Audio Settings（语速/音量/音高），上一轮讨论时明确说了先不做，单独一轮加；③ 把 Kie 的图片/视频接进来，验证真正的异步 Job 路径（目前只验证过同步 provider 路径）；④ 补 `/gallery` 端点 + 展示页；⑤ Android；⑥ 把抽屉内容做完（语言切换 + 设置项）。
