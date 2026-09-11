@@ -140,7 +140,7 @@ function ResultView({ job, onCreateAnother }: { job: JobResponse; onCreateAnothe
   return (
     <div className="flex min-h-screen flex-col px-4">
       <header className="flex items-center justify-between pb-3.5 pt-[18px]">
-        <Link href="/" className="flex h-[34px] w-[34px] items-center justify-center rounded-[10px] border border-border-soft bg-surface">
+        <Link href="/app" className="flex h-[34px] w-[34px] items-center justify-center rounded-[10px] border border-border-soft bg-surface">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--text)" strokeWidth="2">
             <line x1="18" y1="6" x2="6" y2="18" />
             <line x1="6" y1="6" x2="18" y2="18" />

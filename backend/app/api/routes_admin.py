@@ -10,11 +10,19 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import APIError
-from app.api.schemas import CreditGrantRequest, JobResponse, MeResponse, SettingUpdateRequest
+from app.api.schemas import (
+    CreditGrantRequest,
+    JobResponse,
+    MenuItemAdmin,
+    MenuItemPatch,
+    MeResponse,
+    SettingUpdateRequest,
+)
 from app.core.auth import CurrentUser, require_admin
 from app.core.db import get_db
 from app.models.models import Job, User
 from app.services import app_settings, credits
+from app.services import menu as menu_service
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -81,3 +89,59 @@ async def update_setting(
     row = await app_settings.set_setting(db, key, body.value, updated_by=admin.id)
     await db.commit()  # see the comment in services/jobs.py submit_tts — same reasoning
     return {"key": row.key, "value": body.value}
+
+
+# ---- Capability menu (the "+" button's sheet) — one item at a time, not a
+# raw settings blob PATCH, so an edit can't silently corrupt the other items
+# (see services/menu.py's module docstring). ----
+
+
+@router.get("/menu", response_model=list[MenuItemAdmin])
+async def list_menu(
+    _admin: CurrentUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> list[MenuItemAdmin]:
+    return await menu_service.list_for_admin(db)
+
+
+@router.post("/menu", response_model=MenuItemAdmin, status_code=201)
+async def create_menu_item(
+    body: MenuItemAdmin,
+    admin: CurrentUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> MenuItemAdmin:
+    try:
+        item = await menu_service.create_item(db, body.model_dump(), updated_by=admin.id)
+    except ValueError as exc:
+        raise APIError(status_code=422, code="invalid_input", message=str(exc)) from exc
+    await db.commit()
+    return item
+
+
+@router.patch("/menu/{item_id}", response_model=MenuItemAdmin)
+async def update_menu_item(
+    item_id: str,
+    body: MenuItemPatch,
+    admin: CurrentUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> MenuItemAdmin:
+    patch = body.model_dump(exclude_unset=True)
+    try:
+        item = await menu_service.update_item(db, item_id, patch, updated_by=admin.id)
+    except KeyError as exc:
+        raise APIError(status_code=404, code="not_found", message=str(exc)) from exc
+    await db.commit()
+    return item
+
+
+@router.delete("/menu/{item_id}", status_code=204)
+async def delete_menu_item(
+    item_id: str,
+    admin: CurrentUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    try:
+        await menu_service.delete_item(db, item_id, updated_by=admin.id)
+    except KeyError as exc:
+        raise APIError(status_code=404, code="not_found", message=str(exc)) from exc
+    await db.commit()

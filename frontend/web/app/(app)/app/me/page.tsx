@@ -14,7 +14,7 @@ export default function MePage() {
     api.listJobs().then(setJobs).catch(() => setJobs([]));
   }, []);
 
-  const publicCount = jobs?.filter((j) => j.visibility === "public").length ?? 0;
+  const publicCount = jobs?.filter((j) => j.visibility === "public").length ?? null;
 
   return (
     <div className="relative">
@@ -58,7 +58,7 @@ export default function MePage() {
       </div>
 
       <div className="relative mx-5 mt-2.5 grid grid-cols-2 gap-2.5">
-        <StatTile label="Creations" value={jobs?.length ?? 0} />
+        <StatTile label="Creations" value={jobs?.length ?? null} />
         <StatTile label="Public" value={publicCount} />
       </div>
 
@@ -99,10 +99,10 @@ export default function MePage() {
   );
 }
 
-function StatTile({ label, value }: { label: string; value: number }) {
+function StatTile({ label, value }: { label: string; value: number | null }) {
   return (
     <div className="rounded-2xl border border-border-soft bg-surface px-3 py-3 text-center">
-      <div className="font-display text-lg font-bold tabular-nums">{value}</div>
+      <div className="font-display text-lg font-bold tabular-nums">{value ?? "…"}</div>
       <div className="mt-0.5 text-[10.5px] text-text-2">{label}</div>
     </div>
   );

@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
@@ -17,7 +18,7 @@ export default function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (!loading && user) router.replace("/");
+    if (!loading && user) router.replace("/app");
   }, [loading, user, router]);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -58,13 +59,7 @@ export default function LoginPage() {
 
       <div className="relative flex min-h-screen flex-col justify-center px-6 py-12 max-w-sm mx-auto">
         <div className="flex items-center gap-2.5 mb-10 justify-center">
-          <div className="w-8 h-8 rounded-[9px] grad-bg flex items-center justify-center">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0a0a1a" strokeWidth="2.2" strokeLinecap="round">
-              <path d="M12 3v9" />
-              <path d="M8 8c0 4 1.8 6 4 6s4-2 4-6" />
-              <path d="M12 17v4" />
-            </svg>
-          </div>
+          <Image src="/brand/mark.webp" alt="" width={32} height={32} priority />
           <span className="font-display font-bold text-xl tracking-tight">Voicica</span>
         </div>
 

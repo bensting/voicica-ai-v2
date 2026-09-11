@@ -93,6 +93,14 @@ backend/
 
 **已定（ADR 0001-0012）**：provider 适配层、异步 Job 契约、积分账本（冻结→结算/释放）、素材持久化到 R2、前端四端拆分、数据库选型、Fish Audio 接入、provider 目录同步策略、Auth = Firebase Auth、语音克隆是可复用资产、作品库 = 可见性字段、前端框架 Next.js、`app_settings` 配置模式。`docs/flows.md` 持续更新，别让它过期。
 
-**明确暂缓、不阻塞往下做的**：`(marketing)` 展示页、语音选择器（没有 voice catalog 接口）、公开作品库浏览页（`/gallery` 接口没做）、Android、真实支付、Admin 网页界面（现在只有三个受保护接口）、作品库审核方式、具体计费数字。
+**能力菜单（"+"号弹出的那个 bottom sheet）已经做完并端到端验证过**：完全后端驱动，前端零业务配置（明确原则："我希望前端基本上没有任何配置，要轻"）——`GET /config/menu?locale=` 按 locale 解析好返回给客户端，`/admin/menu` 一套 CRUD（增删改查单条，不是裸 JSON blob PATCH，避免多语言结构数据被误改坏）；数据存在 `app_settings` 的一行 JSON（`capability_menu` key），这是 ADR 0012 配置分类里新加的第四类"结构化多条目、需要后台可编辑"的用法。前端唯一保留的本地配置是一张图标 key → SVG 的小对照表（`frontend/web/components/icons.tsx`，用户明确认可的唯一例外）。目前 5 个能力里只有 Text to Voice 是 `enabled`，其余 4 个（Dialogue/Image/BG Remove/Video Download）种子数据里存在但禁用，等各自后端切片。详见 `docs/api-contract.md`"Capability menu"节、`backend/app/services/menu.py`。
 
-**下一步候选**（还没定，看用户想先做哪个）：① 接 Azure/Google 第二个 provider，验证 fallback/多 provider 场景；② 把 Kie 的图片/视频接进来，验证真正的异步 Job 路径（目前只验证过 Fish Audio 这种"伪同步"路径）；③ 补 `/gallery` 端点 + 展示页；④ Android。
+**路由结构修正**：之前 `/` 直接served了登录后的 app，被用户指出这不对（"后面我们还有网站的部分 那个才是根目录"）。现在 `frontend/web` 的登录后功能整体挂在字面 URL 前缀 `/app` 下（`app/(app)/app/...`，route group 本身不影响 URL，必须再套一层真实的 `app/` 目录才行——这个坑踩过一次，见 `frontend/web/README.md`），根路径 `/` 现在只是一个临时占位重定向组件（登录态判断后跳 `/app` 或 `/login`），留给以后的 `(marketing)`。
+
+**Logo/图标资产复用了老项目的**（用户明确要求："logo相关的就复用老项目的，老项目的logo不错"）：`frontend/web/public/brand/` 下的 `mark.webp`/`mark-512.webp`（图腾鸟标）、`credits-token.png`（积分徽章），已经接进 Home 页头部、登录页、积分 pill。
+
+**明确暂缓、不阻塞往下做的**：`(marketing)` 展示页、语音选择器（没有 voice catalog 接口）、公开作品库浏览页（`/gallery` 接口没做）、Android、真实支付、Admin 网页界面（现在只有受保护接口，无 UI；菜单管理已有全套 CRUD 接口可以随时接 UI）、作品库审核方式、具体计费数字、左上角设置/语言抽屉（方向已定——左上角，不是右上角——还没实现）。
+
+**还没答的问题，问了好几次了**：i18n 到底走 locale 前缀 URL（`/th/app/...`）还是 cookie/localStorage 存 locale 不带 URL 前缀——这个卡住了接 `next-intl` 和 `api.getMenu()` 里硬编码的 `locale="en"`。
+
+**下一步候选**（还没定，看用户想先做哪个）：① 接 Azure/Google 第二个 provider，验证 fallback/多 provider 场景；② 把 Kie 的图片/视频接进来，验证真正的异步 Job 路径（目前只验证过 Fish Audio 这种"伪同步"路径）；③ 补 `/gallery` 端点 + 展示页；④ Android；⑤ 回答 i18n URL 策略问题，接上左上角抽屉。

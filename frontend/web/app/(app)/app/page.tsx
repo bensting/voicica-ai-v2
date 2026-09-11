@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api, type JobResponse } from "@/lib/api";
@@ -20,13 +21,7 @@ export default function HomePage() {
 
       <header className="relative flex items-center justify-between px-5 pt-6 pb-2">
         <div className="flex items-center gap-2.5">
-          <div className="h-[30px] w-[30px] rounded-[9px] grad-bg flex items-center justify-center">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0a0a1a" strokeWidth="2.2" strokeLinecap="round">
-              <path d="M12 3v9" />
-              <path d="M8 8c0 4 1.8 6 4 6s4-2 4-6" />
-              <path d="M12 17v4" />
-            </svg>
-          </div>
+          <Image src="/brand/mark.webp" alt="" width={30} height={30} priority />
           <span className="font-display font-bold text-[17px] tracking-tight">Voicica</span>
         </div>
         <CreditsPill />
@@ -35,7 +30,7 @@ export default function HomePage() {
       <section className="relative px-5 pt-6">
         <div className="flex items-baseline justify-between">
           <h2 className="font-display font-bold text-[15px]">Your creations</h2>
-          <Link href="/create/tts" className="text-xs font-semibold text-a3">
+          <Link href="/app/create/tts" className="text-xs font-semibold text-a3">
             + New
           </Link>
         </div>
@@ -52,7 +47,7 @@ export default function HomePage() {
               Nothing here yet — your first generation will show up in this list.
             </p>
             <Link
-              href="/create/tts"
+              href="/app/create/tts"
               className="grad-bg rounded-xl px-4 py-2 text-xs font-semibold text-[#120a1c]"
             >
               Generate speech

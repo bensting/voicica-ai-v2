@@ -65,8 +65,23 @@ export interface JobResponse {
   completed_at: string | null;
 }
 
+export interface MenuItem {
+  id: string;
+  icon: string;
+  route: string;
+  badge: string | null;
+  label: string;
+  description: string;
+}
+
 export const api = {
   me: () => request<MeResponse>("/me"),
+
+  /** locale hardcoded to "en" until the i18n routing strategy is decided —
+   * wire this to the active locale then (lib/api.ts is the only place that
+   * needs to change). */
+  getMenu: (locale: string = "en") =>
+    request<MenuItem[]>(`/config/menu?locale=${encodeURIComponent(locale)}`),
 
   submitTts: (text: string, referenceId?: string) =>
     request<JobResponse>("/generate/tts", {

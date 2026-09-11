@@ -59,6 +59,16 @@ Separate endpoints per capability (not one generic `POST /jobs`) so each gets it
 
 Both required-auth for now by default consistency with everything else being gated — neither is sensitive data, so this is a soft call, easy to open up later if there's a reason to (e.g. showing the catalog on a marketing page).
 
+### Capability menu (drives the "+" button, [ADR 0012](decisions/0012-app-settings-table.md))
+
+The frontend has no hardcoded list of capabilities ("+" opens a sheet, not a set of hrefs baked into a component) — it renders whatever this returns, already resolved to one locale. The one thing the frontend still owns locally is a small icon-key → SVG lookup table (`icon` below is a key into that, not markup).
+
+| Method & path | Auth | Purpose |
+|---|---|---|
+| `GET /config/menu?locale=` | required | Enabled items, ordered, resolved to `locale` (`th`/`id`/`es`/`en`, falls back to `en`) — each `{ "id", "icon", "route", "badge", "label", "description" }` |
+
+Backed by a single `app_settings` row (key `capability_menu`, a JSON array — not a dedicated table, per ADR 0012's "structured multi-item config" case) holding every locale's labels/descriptions per item plus `enabled`/`order`; admins manage it item-by-item below rather than PATCHing the raw blob, since a hand-edited JSON array of multi-locale strings is easy to corrupt.
+
 ### Gallery ([ADR 0010](decisions/0010-public-gallery-visibility-flag.md))
 
 | Method & path | Auth | Purpose |
@@ -82,6 +92,10 @@ Separate app/deployment ([ADR 0005](decisions/0005-frontend-surfaces.md)), own r
 | `GET /admin/jobs` | admin role | List jobs across all users, filterable (debugging/monitoring) |
 | `GET /admin/settings` | admin role | Read all `app_settings` |
 | `PATCH /admin/settings/{key}` | admin role | Update one tunable value ([ADR 0012](decisions/0012-app-settings-table.md)) |
+| `GET /admin/menu` | admin role | List every capability-menu item, including disabled ones, all locales |
+| `POST /admin/menu` | admin role | Add an item (`id, icon, route, enabled, order, badge, labels{}, descriptions{}`) |
+| `PATCH /admin/menu/{item_id}` | admin role | Partial update (any subset of the fields above) |
+| `DELETE /admin/menu/{item_id}` | admin role | Remove an item |
 
 ## Open items
 
