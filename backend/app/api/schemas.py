@@ -43,12 +43,15 @@ class VoiceCatalogResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class LocaleOption(BaseModel):
-    """GET /catalog/locales — one selectable language for the voice picker's
-    dropdown, with how many voices it has (so the frontend never shows an
-    empty language)."""
+class LanguageOption(BaseModel):
+    """GET /catalog/languages — one selectable base language ("es", not
+    "es-MX") for the voice picker's dropdown, with how many voices it has
+    across every provider/locale variant combined. Grouped by base language
+    rather than exact locale because providers don't carve a language into
+    countries the same way (Azure has ~22 Spanish locales, Google has 2) —
+    see services/voice_catalog.py's module docstring."""
 
-    locale: str
+    language: str
     voice_count: int
 
 

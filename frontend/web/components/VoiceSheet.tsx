@@ -1,37 +1,29 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { api, type LocaleOption, type Voice } from "@/lib/api";
+import { api, type LanguageOption, type Voice } from "@/lib/api";
 import { getLocale } from "@/lib/locale";
 import { friendlyVoiceName, localeDisplayName } from "@/lib/locale-names";
 
 const PROVIDER_LABELS: Record<string, string> = { azure: "Azure", google: "Google", fish_audio: "Fish Audio" };
 
-/** One representative locale per commonly-picked language, target market
- * first — mirrors the prior project's POPULAR_LANGUAGES shortlist. Every
- * other locale the catalog actually has (158+, all of Azure/Google's
- * coverage — no target-market restriction, backend/README.md) still shows
- * up below, under "All languages"; this only decides what's quick to reach. */
-const POPULAR_LOCALES = [
-  "th-TH", "id-ID", "es-ES", "es-MX", "en-US",
-  "zh-CN", "ja-JP", "ko-KR", "fr-FR", "de-DE",
-  "pt-BR", "ru-RU", "ar-SA", "hi-IN", "vi-VN",
-];
-
-/** lib/locale.ts's short app-locale cookie ("th") -> a representative
- * BCP-47 voice locale ("th-TH") to preselect the picker with. */
-const APP_LOCALE_TO_VOICE_LOCALE: Record<string, string> = {
-  th: "th-TH",
-  id: "id-ID",
-  es: "es-ES",
-  en: "en-US",
-};
+/** A curated shortlist of base languages, target market first — mirrors the
+ * prior project's POPULAR_LANGUAGES. Every other language the catalog
+ * actually has (83 total, all of Azure/Google's coverage — no
+ * target-market restriction, backend/README.md) still shows up below,
+ * under "All languages"; this only decides what's quick to reach. */
+const POPULAR_LANGUAGES = ["th", "id", "es", "en", "zh", "ja", "ko", "fr", "de", "pt", "ru", "ar", "hi", "vi"];
 
 /** The "Select a voice" picker — fetches one language's voices at a time
  * (like the prior project's useVoices() hook), never the whole catalog:
  * GET /catalog/voices covers every language Azure/Google support (2800+
  * voices total), so loading it all up front would be exactly the latency
- * cost the product's own speed priority argues against. */
+ * cost the product's own speed priority argues against. Selection groups
+ * by base language ("es"), not exact locale ("es-MX") — providers don't
+ * carve a language into countries the same way (Azure has ~22 Spanish
+ * locales, Google has 2), so a locale-level dropdown would really just be
+ * Azure's taxonomy; every provider's matching voices still come back once
+ * a language is picked, each voice showing its own specific locale. */
 export function VoiceSheet({
   isOpen,
   onClose,
@@ -41,52 +33,55 @@ export function VoiceSheet({
   onClose: () => void;
   onSelect: (voice: Voice) => void;
 }) {
-  const [locales, setLocales] = useState<LocaleOption[] | null>(null);
-  const [selectedLocale, setSelectedLocale] = useState<string | null>(null);
+  const [languages, setLanguages] = useState<LanguageOption[] | null>(null);
+  const [selectedLanguage, setSelectedLanguage] = useState<string | null>(null);
   const [voices, setVoices] = useState<Voice[] | null>(null);
-  const [voicesLocale, setVoicesLocale] = useState<string | null>(null);
+  const [voicesLanguage, setVoicesLanguage] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [gender, setGender] = useState("all");
   const [provider, setProvider] = useState("all");
 
-  // Load the language list once, then pick a sensible starting locale.
+  // Load the language list once, then pick a sensible starting language.
+  // lib/locale.ts's app-locale cookie ("th"/"id"/"es"/"en") is already a
+  // base-language code, so no separate mapping table is needed here.
   useEffect(() => {
-    if (isOpen && locales === null) {
-      api.getLocales().then((options) => {
-        setLocales(options);
-        const codes = new Set(options.map((o) => o.locale));
-        const preferred = APP_LOCALE_TO_VOICE_LOCALE[getLocale()];
-        const fallback = POPULAR_LOCALES.find((l) => codes.has(l)) ?? options[0]?.locale;
-        setSelectedLocale((preferred && codes.has(preferred) ? preferred : fallback) ?? null);
-      }).catch(() => setLocales([]));
+    if (isOpen && languages === null) {
+      api.getLanguages().then((options) => {
+        setLanguages(options);
+        const codes = new Set(options.map((o) => o.language));
+        const preferred = getLocale();
+        const fallback = POPULAR_LANGUAGES.find((l) => codes.has(l)) ?? options[0]?.language;
+        setSelectedLanguage((codes.has(preferred) ? preferred : fallback) ?? null);
+      }).catch(() => setLanguages([]));
     }
-  }, [isOpen, locales]);
+  }, [isOpen, languages]);
 
-  // Fetch that locale's voices whenever it changes. voicesLocale (rather
-  // than resetting `voices` to null synchronously, which trips the
-  // set-state-in-effect lint rule) is how the render below knows a fetch
-  // for the current selection is still in flight.
+  // Fetch that language's voices (every locale variant, every provider)
+  // whenever it changes. voicesLanguage (rather than resetting `voices` to
+  // null synchronously, which trips the set-state-in-effect lint rule) is
+  // how the render below knows a fetch for the current selection is still
+  // in flight.
   useEffect(() => {
-    if (!selectedLocale) return;
+    if (!selectedLanguage) return;
     let cancelled = false;
     api
-      .getVoices(undefined, selectedLocale)
+      .getVoices(undefined, { language: selectedLanguage })
       .then((result) => {
         if (cancelled) return;
         setVoices(result);
-        setVoicesLocale(selectedLocale);
+        setVoicesLanguage(selectedLanguage);
       })
       .catch(() => {
         if (cancelled) return;
         setVoices([]);
-        setVoicesLocale(selectedLocale);
+        setVoicesLanguage(selectedLanguage);
       });
     return () => {
       cancelled = true;
     };
-  }, [selectedLocale]);
+  }, [selectedLanguage]);
 
-  const loadingVoices = selectedLocale !== null && voicesLocale !== selectedLocale;
+  const loadingVoices = selectedLanguage !== null && voicesLanguage !== selectedLanguage;
 
   useEffect(() => {
     document.body.style.overflow = isOpen ? "hidden" : "";
@@ -96,13 +91,13 @@ export function VoiceSheet({
   }, [isOpen]);
 
   const { popularOptions, otherOptions } = useMemo(() => {
-    if (!locales) return { popularOptions: [], otherOptions: [] };
-    const byCode = new Map(locales.map((o) => [o.locale, o]));
-    const popular = POPULAR_LOCALES.map((l) => byCode.get(l)).filter((o): o is LocaleOption => !!o);
-    const popularCodes = new Set(popular.map((o) => o.locale));
-    const other = locales.filter((o) => !popularCodes.has(o.locale));
+    if (!languages) return { popularOptions: [], otherOptions: [] };
+    const byCode = new Map(languages.map((o) => [o.language, o]));
+    const popular = POPULAR_LANGUAGES.map((l) => byCode.get(l)).filter((o): o is LanguageOption => !!o);
+    const popularCodes = new Set(popular.map((o) => o.language));
+    const other = languages.filter((o) => !popularCodes.has(o.language));
     return { popularOptions: popular, otherOptions: other };
-  }, [locales]);
+  }, [languages]);
 
   const providers = useMemo(() => {
     if (!voices) return [];
@@ -158,16 +153,16 @@ export function VoiceSheet({
 
           <div className="px-4 pb-2">
             <select
-              value={selectedLocale ?? ""}
-              onChange={(e) => setSelectedLocale(e.target.value)}
-              disabled={!locales}
+              value={selectedLanguage ?? ""}
+              onChange={(e) => setSelectedLanguage(e.target.value)}
+              disabled={!languages}
               className="w-full rounded-xl border border-border-soft bg-surface px-3 py-2.5 text-sm text-text disabled:opacity-60"
             >
               {popularOptions.length > 0 && (
                 <optgroup label="Popular">
                   {popularOptions.map((o) => (
-                    <option key={o.locale} value={o.locale}>
-                      {localeDisplayName(o.locale)}
+                    <option key={o.language} value={o.language}>
+                      {localeDisplayName(o.language)}
                     </option>
                   ))}
                 </optgroup>
@@ -175,8 +170,8 @@ export function VoiceSheet({
               {otherOptions.length > 0 && (
                 <optgroup label="All languages">
                   {otherOptions.map((o) => (
-                    <option key={o.locale} value={o.locale}>
-                      {localeDisplayName(o.locale)}
+                    <option key={o.language} value={o.language}>
+                      {localeDisplayName(o.language)}
                     </option>
                   ))}
                 </optgroup>
@@ -211,7 +206,7 @@ export function VoiceSheet({
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
-            {(locales === null || loadingVoices) && (
+            {(languages === null || loadingVoices) && (
               <div className="flex justify-center py-10">
                 <div className="h-5 w-5 animate-spin rounded-full border-2 border-border-soft border-t-a3" />
               </div>
@@ -235,7 +230,7 @@ export function VoiceSheet({
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium">{friendlyVoiceName(v)}</div>
                     <div className="mt-0.5 truncate text-[11px] text-text-2">
-                      {v.gender ?? "—"} · {PROVIDER_LABELS[v.provider] ?? v.provider}
+                      {localeDisplayName(v.locale)} · {v.gender ?? "—"} · {PROVIDER_LABELS[v.provider] ?? v.provider}
                     </div>
                   </div>
                 </button>

@@ -85,11 +85,15 @@ export interface Voice {
   styles: string[] | null;
 }
 
-/** GET /catalog/locales — one selectable language, with how many voices it
- * has. Populates the voice picker's language dropdown cheaply, without
- * fetching every voice just to read off `.locale`. */
-export interface LocaleOption {
-  locale: string;
+/** GET /catalog/languages — one selectable base language ("es", not
+ * "es-MX"), with how many voices it has across every provider/locale
+ * variant combined. Grouped by base language, not exact locale, because
+ * providers don't carve a language into countries the same way (Azure has
+ * ~22 Spanish locales, Google has 2) — a locale-level picker would really
+ * just be Azure's taxonomy. Populates the picker's dropdown cheaply,
+ * without fetching every voice just to read off `.locale`. */
+export interface LanguageOption {
+  language: string;
   voice_count: number;
 }
 
@@ -108,19 +112,25 @@ export const api = {
       body: JSON.stringify({ text, voice_id: voiceId ?? null }),
     }),
 
-  /** Every locale actually present in the catalog (158+ across Azure/Google
-   * — no target-market restriction, see backend/app/services/voice_catalog.py's
-   * module docstring for why). Cheap: counts, not full voice objects. */
-  getLocales: (provider?: string) =>
-    request<LocaleOption[]>(`/catalog/locales${provider ? `?provider=${encodeURIComponent(provider)}` : ""}`),
+  /** Every base language actually present in the catalog (83 across
+   * Azure/Google — no target-market restriction, see
+   * backend/app/services/voice_catalog.py's module docstring for why).
+   * Cheap: counts, not full voice objects. */
+  getLanguages: (provider?: string) =>
+    request<LanguageOption[]>(`/catalog/languages${provider ? `?provider=${encodeURIComponent(provider)}` : ""}`),
 
-  /** provider/locale both optional filters — e.g. getVoices("azure", "th-TH").
-   * Always pass a `locale` from the picker — the catalog is ~2800 voices
-   * across every language Azure/Google support, too much to fetch at once. */
-  getVoices: (provider?: string, locale?: string) => {
+  /** `language` prefix-matches a base language ("es" -> every es-* locale,
+   * from every provider) — what the picker uses, so switching languages
+   * never misses a provider's voices just because its locale code for that
+   * language happens to differ. `locale` is an exact match, for the rare
+   * case something wants one specific provider-specific variant. Always
+   * pass one or the other from the picker — the full catalog is ~2800
+   * voices across every language Azure/Google support. */
+  getVoices: (provider?: string, options?: { locale?: string; language?: string }) => {
     const params = new URLSearchParams();
     if (provider) params.set("provider", provider);
-    if (locale) params.set("locale", locale);
+    if (options?.locale) params.set("locale", options.locale);
+    if (options?.language) params.set("language", options.language);
     const qs = params.toString();
     return request<Voice[]>(`/catalog/voices${qs ? `?${qs}` : ""}`);
   },
