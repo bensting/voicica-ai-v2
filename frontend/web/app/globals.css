@@ -80,8 +80,22 @@ body {
   animation: slide-up 0.22s ease-out;
 }
 
+@keyframes slide-in-left {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.animate-slide-in-left {
+  animation: slide-in-left 0.22s ease-out;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .animate-slide-up {
+  .animate-slide-up,
+  .animate-slide-in-left {
     animation: none;
   }
 }

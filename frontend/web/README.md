@@ -33,6 +33,6 @@ Signed up a real account through the actual browser UI, submitted a real TTS job
 
 ## Not built yet
 
-`(marketing)` route group, voice picker (no voice catalog endpoint exists server-side yet), the public gallery page (no `/gallery` endpoint yet — ADR 0010's mechanism is done backend-side, browsing isn't wired up), Android, real payment top-up (the "Top up" button doesn't do anything yet), a top-left settings/language drawer (agreed direction, not built — this is what will eventually call `lib/locale.ts`'s `setLocale()`).
+`(marketing)` route group, voice picker (no voice catalog endpoint exists server-side yet), the public gallery page (no `/gallery` endpoint yet — ADR 0010's mechanism is done backend-side, browsing isn't wired up), Android, real payment top-up (the "Top up" button doesn't do anything yet). The top-left drawer (`components/SettingsDrawer.tsx`) exists as a real icon + open/close panel on Home, but its contents are a placeholder ("coming soon") — the language switcher that will call `lib/locale.ts`'s `setLocale()` isn't built yet.
 
 **i18n routing** ([ADR 0013](../../docs/decisions/0013-i18n-routing-strategy.md)): `(marketing)` will use locale-prefixed URLs once it exists; `(app)` uses a plain cookie (`lib/locale.ts`'s `getLocale()`/`setLocale()`) — already wired into `CreateSheet`'s `GET /config/menu` call, just nothing writes the cookie yet since the language switcher isn't built.

@@ -5,9 +5,11 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api, type JobResponse } from "@/lib/api";
 import { CreditsPill } from "@/components/CreditsPill";
+import { SettingsDrawer } from "@/components/SettingsDrawer";
 
 export default function HomePage() {
   const [jobs, setJobs] = useState<JobResponse[] | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
     api.listJobs().then(setJobs).catch(() => setJobs([]));
@@ -20,12 +22,27 @@ export default function HomePage() {
       </div>
 
       <header className="relative flex items-center justify-between px-5 pt-6 pb-2">
-        <div className="flex items-center gap-2.5">
-          <Image src="/brand/mark.webp" alt="" width={30} height={30} priority />
-          <span className="font-display font-bold text-[17px] tracking-tight">Voicica</span>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setDrawerOpen(true)}
+            aria-label="Open menu"
+            className="flex h-8 w-8 items-center justify-center rounded-full text-text-2 active:bg-surface-2"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="4" y1="7" x2="20" y2="7" />
+              <line x1="4" y1="12" x2="20" y2="12" />
+              <line x1="4" y1="17" x2="14" y2="17" />
+            </svg>
+          </button>
+          <div className="flex items-center gap-2.5">
+            <Image src="/brand/mark.webp" alt="" width={30} height={30} priority />
+            <span className="font-display font-bold text-[17px] tracking-tight">Voicica</span>
+          </div>
         </div>
         <CreditsPill />
       </header>
+
+      <SettingsDrawer isOpen={drawerOpen} onClose={() => setDrawerOpen(false)} />
 
       <section className="relative px-5 pt-6">
         <div className="flex items-baseline justify-between">
