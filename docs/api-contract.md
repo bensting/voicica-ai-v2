@@ -22,7 +22,7 @@ The backend's HTTP surface, consumed identically by `frontend/web`, `frontend/ad
 
 | Method & path | Auth | Purpose |
 |---|---|---|
-| `POST /generate/tts` | required | Text-to-speech — `{text, voice_id}`. `voice_id` is a `GET /catalog/voices` row's id; omit it for the default voice (Fish Audio). Picking a voice picks the provider — Azure/Google/Fish Audio are routed to automatically based on which voice's `voice_id` was sent, never a separate provider field (architecture.md §3c). |
+| `POST /generate/tts` | required | Text-to-speech — `{text, voice_id, speed, volume, pitch}`. `voice_id` is a `GET /catalog/voices` row's id; omit it for the default voice (Fish Audio). Picking a voice picks the provider — Azure/Google/Fish Audio are routed to automatically based on which voice's `voice_id` was sent, never a separate provider field (architecture.md §3c). `speed`/`volume`/`pitch` are one scale across every provider (`speed` 0.5-2.0x default 1.0; `volume`/`pitch` 1-100 default 50) — each adapter converts to its own units server-side (see `services/jobs.py submit_tts`'s docstring for the exact, verified-in-production formulas); Fish Audio has no pitch control and silently ignores that field. All three optional, defaulting to a no-op on every provider. |
 | `POST /generate/image` | required | Kie image generation |
 | `POST /generate/music` | required | Kie music generation |
 | `POST /generate/video` | required | Kie video generation |

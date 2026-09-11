@@ -20,7 +20,14 @@ from app.services import voice_catalog as voice_catalog_service
 
 
 async def submit_tts(
-    db: AsyncSession, *, user_id: str, text: str, voice_id: uuid.UUID | None
+    db: AsyncSession,
+    *,
+    user_id: str,
+    text: str,
+    voice_id: uuid.UUID | None,
+    speed: float = 1.0,
+    volume: int = 50,
+    pitch: int = 50,
 ) -> Job:
     """Submit a TTS job. Raises credits.InsufficientCreditsError before
     anything reaches a provider if the user can't afford the estimated cost;
@@ -31,7 +38,28 @@ async def submit_tts(
     (docs/data-model.md), so picking a voice IS picking a provider. No
     voice_id means the "no voice selected" default — fish_audio, which is
     the only provider in this slice with a sensible default voice of its own
-    (Azure/Google both require an explicit voice — see their adapters)."""
+    (Azure/Google both require an explicit voice — see their adapters).
+
+    speed/volume/pitch use one provider-agnostic scale (schemas.TTSRequest:
+    speed 0.5-2.0x, volume/pitch 1-100 centered on 50) passed through to
+    every adapter as-is; each converts to its own units — ranges and exact
+    formulas ported from the prior project's verified-in-production
+    conversions (`ai-voice-labs-web`'s azure-tts.ts/google-tts.ts/queue/tts
+    route.ts), not re-derived from scratch:
+      - Azure (SSML <prosody>): rate% = (speed-1)*100, pitch% = pitch-50,
+        volume = volume as-is (0-100). Always wraps the voice in <prosody> —
+        the defaults (0%, 0%, 50) are themselves a no-op.
+      - Google (audioConfig): speakingRate = speed clamped to Google's wider
+        0.25-4.0; pitch = (pitch-50)*0.4 (their -20..20 semitone range);
+        volumeGainDb = (volume-50)*0.2 (their -96..16 dB range, kept modest).
+        Some newer voices (Chirp3 HD) reject `pitch` outright — the adapter
+        retries once without it on that specific 400, same as the prior
+        project's fallback.
+      - Fish Audio: only supports speed + volume, no pitch (silently
+        ignored, matching the prior project's own comment on why). Included
+        in the request only when they differ from default, in Fish's own
+        prosody shape: speed as-is, volume as (volume-50)/50 (their ~-1..1
+        relative scale)."""
     estimated_cost = await credits.estimate_tts_cost(db, text)
 
     provider_name = "fish_audio"
@@ -51,7 +79,13 @@ async def submit_tts(
         capability="tts",
         provider=provider_name,
         status="pending",
-        input={"text": text, "voice_id": str(voice_id) if voice_id else None},
+        input={
+            "text": text,
+            "voice_id": str(voice_id) if voice_id else None,
+            "speed": speed,
+            "volume": volume,
+            "pitch": pitch,
+        },
         estimated_cost=estimated_cost,
     )
     db.add(job)
@@ -61,7 +95,7 @@ async def submit_tts(
     job.hold_id = credit_hold.id
 
     provider = get_provider_by_name(provider_name)
-    provider_inputs: dict[str, Any] = {"text": text}
+    provider_inputs: dict[str, Any] = {"text": text, "speed": speed, "volume": volume, "pitch": pitch}
     if provider_voice_id:
         provider_inputs["provider_voice_id"] = provider_voice_id
     if locale:

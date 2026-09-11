@@ -23,7 +23,15 @@ async def create_tts_job(
     db: AsyncSession = Depends(get_db),
 ) -> JobResponse:
     try:
-        job = await jobs.submit_tts(db, user_id=user.id, text=body.text, voice_id=body.voice_id)
+        job = await jobs.submit_tts(
+            db,
+            user_id=user.id,
+            text=body.text,
+            voice_id=body.voice_id,
+            speed=body.speed,
+            volume=body.volume,
+            pitch=body.pitch,
+        )
     except credits.InsufficientCreditsError as exc:
         raise APIError(
             status_code=402,

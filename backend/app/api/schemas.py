@@ -28,6 +28,13 @@ class TTSRequest(BaseModel):
         description="A voice_catalog row's id (GET /catalog/voices) — picking a voice picks the "
         "provider it belongs to. Omit for the default voice (Fish Audio).",
     )
+    # Same 3-parameter, provider-agnostic scale for every provider (docs/api-contract.md):
+    # speed 0.5-2.0x, volume/pitch 1-100 centered on 50. Each adapter converts to its own
+    # units (services/jobs.py's docstring on submit_tts has the exact formulas, ported from
+    # the prior project's verified-in-production conversions).
+    speed: float = Field(default=1.0, ge=0.5, le=2.0)
+    volume: int = Field(default=50, ge=1, le=100)
+    pitch: int = Field(default=50, ge=1, le=100)
 
 
 class VoiceCatalogResponse(BaseModel):

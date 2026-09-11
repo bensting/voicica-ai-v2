@@ -42,9 +42,24 @@ class AzureProvider(Provider):
                 error="Azure Speech requires a selected voice (no default voice exists).",
             )
 
+        # speed/volume/pitch: one provider-agnostic scale (schemas.TTSRequest,
+        # docstring on services/jobs.py's submit_tts), converted to Azure's own
+        # SSML <prosody> percentages — formula ported from the prior project's
+        # verified conversion, not re-derived: rate% = (speed-1)*100,
+        # pitch% = pitch-50, volume passed through as-is (0-100).
+        speed = inputs.get("speed", 1.0)
+        volume = inputs.get("volume", 50)
+        pitch = inputs.get("pitch", 50)
+        rate = round((speed - 1.0) * 100)
+        rate_str = f"+{rate}%" if rate > 0 else f"{rate}%"
+        pitch_val = round(pitch - 50)
+        pitch_str = f"+{pitch_val}%" if pitch_val > 0 else f"{pitch_val}%"
+
         ssml = (
             f'<speak version="1.0" xml:lang="{locale}">'
-            f'<voice name="{voice}">{escape(text)}</voice></speak>'
+            f'<voice name="{voice}">'
+            f'<prosody rate="{rate_str}" pitch="{pitch_str}" volume="{round(volume)}">'
+            f"{escape(text)}</prosody></voice></speak>"
         )
 
         try:

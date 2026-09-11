@@ -40,6 +40,24 @@ class FishAudioProvider(Provider):
         if reference_id:
             payload["reference_id"] = reference_id
 
+        # speed/volume: one provider-agnostic scale (schemas.TTSRequest,
+        # docstring on services/jobs.py's submit_tts), converted to Fish
+        # Audio's own `prosody` shape — ported from the prior project's
+        # verified conversion. No pitch support here (verified: no such
+        # parameter in Fish Audio's API), silently ignored rather than
+        # erroring — the other two providers cover pitch. Only sent when it
+        # differs from default, matching the prior project (an explicit
+        # prosody object isn't assumed to be a harmless no-op at 1.0/50).
+        speed = inputs.get("speed", 1.0)
+        volume = inputs.get("volume", 50)
+        prosody: dict[str, float] = {}
+        if speed != 1.0:
+            prosody["speed"] = speed
+        if volume != 50:
+            prosody["volume"] = (volume - 50) / 50
+        if prosody:
+            payload["prosody"] = prosody
+
         try:
             async with httpx.AsyncClient(timeout=60) as client:
                 response = await client.post(

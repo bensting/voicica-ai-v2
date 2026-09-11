@@ -55,7 +55,7 @@ export interface JobResponse {
   capability: string;
   provider: string;
   status: "pending" | "processing" | "succeeded" | "failed";
-  input: { text: string; voice_id: string | null };
+  input: { text: string; voice_id: string | null; speed: number; volume: number; pitch: number };
   output: { asset_url: string | null } | null;
   error: string | null;
   estimated_cost: number;
@@ -106,10 +106,12 @@ export const api = {
   getMenu: (locale: string = "en") =>
     request<MenuItem[]>(`/config/menu?locale=${encodeURIComponent(locale)}`),
 
-  submitTts: (text: string, voiceId?: string) =>
+  /** `audio` (speed/volume/pitch, lib/audio-settings.ts) is optional — the
+   * backend defaults to 1.0/50/50 (a no-op on every provider) when omitted. */
+  submitTts: (text: string, voiceId?: string, audio?: { speed: number; volume: number; pitch: number }) =>
     request<JobResponse>("/generate/tts", {
       method: "POST",
-      body: JSON.stringify({ text, voice_id: voiceId ?? null }),
+      body: JSON.stringify({ text, voice_id: voiceId ?? null, ...audio }),
     }),
 
   /** Every base language actually present in the catalog (83 across

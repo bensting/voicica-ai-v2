@@ -95,6 +95,17 @@ backend/
 
 **这轮踩的一个坑，写进 `backend/README.md` 的 Conventions 了，别忘了**：跑了很久的 `uvicorn --reload` 进程有时候不会捡起新加的文件（不只是改动已有文件），结果就是新路由/新字段悄悄没生效，`/health` 还正常，浏览器测试甚至"看起来通过"——因为 Pydantic 默认会忽略请求里的未知多余字段，新的 `voice_id` 字段被服务器忽略后请求退回旧代码的默认行为，表面上"成功"实际上根本没走新逻辑。**以后改了路由/字段但怀疑没生效，先 `curl localhost:8000/openapi.json` 确认新路由真的在里面，不确定就直接杀掉进程重启**，别急着怀疑代码写错了。
 
+**Audio Settings（语速/音量/音高）做完并端到端验证过了**：`components/AudioSettingsSheet.tsx`，TTS 创建页"Select a voice"下面新加一行（齿轮图标 + "Speed 1.0x · Volume 50% · Pitch 50"摘要）。三个参数是统一给前端用的一套尺度（speed 0.5-2.0x、volume/pitch 1-100 居中 50），具体怎么转换成每家供应商自己的单位，**直接照抄了老项目 `src/lib/services/{azure,google,fish-audio}-tts.ts` 里生产环境验证过的公式，不是自己瞎猜的**：
+- Azure：SSML `<prosody rate="{(speed-1)*100}%" pitch="{pitch-50}%" volume="{volume}">`。
+- Google：`speakingRate`=speed 原样传（本来就在 Google 更宽的 0.25-4.0 范围内）、`pitch`=(pitch-50)*0.4、`volumeGainDb`=(volume-50)*0.2。**有个坑**：部分新声音（Chirp3 HD）直接拒绝 `pitch` 参数（实测过，400 报错"This voice does not support pitch parameters"），`providers/google.py` 照抄老项目的做法：遇到这个特定报错就自动重试一次、去掉 pitch，不让整个请求因为一个声音不支持的参数失败。
+- Fish Audio：只支持 speed + volume，没有 pitch（照抄老项目注释里确认过的），且只在非默认值时才把 `prosody` 塞进请求体。
+
+真实调用测过全部四种组合：Fish Audio 默认路径（真实走了一遍浏览器 UI，speed 1.5x/pitch 85）、Azure（speed 0.7x/volume 30/pitch 20）、Google Chirp3 HD（验证 pitch 不支持时的自动重试确实生效且最终成功）、Google 普通声音（pitch 本来就支持，不触发重试）——全部成功。
+
+前端这块也照抄了老项目的 UI 结构（3 个 tab 图标切换 speed/volume/pitch，一次看一个滑块，大字号数值显示，Save 按钮），`lib/audio-settings.ts` 里的取值范围、默认值、pitch 文字标签阈值（Deep/Dull/Consistent/Bright/Crisp）都是原样照抄老项目 `types/audioSettings.ts`。这是个**粘性的浏览器本地偏好**（存 localStorage，`tts_audio_settings`），不是每次生成单独配置、也不存后端，跟老项目的 `AudioSettingsContext` 一个思路。
+
+顺带踩了这个 session 第二次同一个 ESLint 坑（`react-hooks/set-state-in-effect`，不让在 effect 里直接同步调用 setState）：`useAudioSettings()`从 localStorage 读初始值改用 `useState` 的懒初始化函数（不用 effect）；`AudioSettingsSheet` 每次打开需要把草稿重置成上次保存的值，没用"依赖 isOpen 的同步 effect"，而是让父组件传 `key={isOpen ? "open" : "closed"}` 强制组件每次打开都重新挂载，`useState(settings)` 的初始值自然就是新的——这样完全不需要 effect。
+
 **踩过的坑，已经修了、也写进了对应 README 当"约定"（别再犯）**：
 - **时间戳必须显式 `DateTime(timezone=True)`**——迁移是 `timestamptz`，ORM 模型不声明会在写入 tz-aware 值时崩溃（`backend/app/models/models.py` 的 `_TZ` 常量）。
 - **写接口必须显式 `await db.commit()`**，不能只靠 `get_db()` 兜底——这套 FastAPI/Starlette 版本下，生成器依赖的 post-yield commit 可能晚于响应发出，导致"提交成功但立刻查询查不到"（真实复现过）。
@@ -119,4 +130,4 @@ backend/
 
 **明确暂缓、不阻塞往下做的**：`(marketing)` 展示页、语音选择器（没有 voice catalog 接口）、公开作品库浏览页（`/gallery` 接口没做）、Android、真实支付、Admin 网页界面（现在只有受保护接口，无 UI；菜单管理已有全套 CRUD 接口可以随时接 UI）、作品库审核方式、具体计费数字、抽屉里的实际设置项（语言切换等）。
 
-**下一步候选**（还没定，看用户想先做哪个）：① Audio Settings（语速/音量/音高），之前讨论时明确说了先不做，单独一轮加；② 声音试听——等真的要做，得先定是"正常走真实 TTS 扣积分"还是"搭一套样本预生成/缓存机制"，这是个真架构决策不是小事；③ 把 Kie 的图片/视频接进来，验证真正的异步 Job 路径（目前只验证过同步 provider 路径）；④ 补 `/gallery` 端点 + 展示页；⑤ Android；⑥ 把抽屉内容做完（语言切换 + 设置项）。
+**下一步候选**（还没定，看用户想先做哪个）：① 声音试听——等真的要做，得先定是"正常走真实 TTS 扣积分"还是"搭一套样本预生成/缓存机制"，这是个真架构决策不是小事；② 把 Kie 的图片/视频接进来，验证真正的异步 Job 路径（目前只验证过同步 provider 路径）；③ 补 `/gallery` 端点 + 展示页；④ Android；⑤ 把抽屉内容做完（语言切换 + 设置项）。

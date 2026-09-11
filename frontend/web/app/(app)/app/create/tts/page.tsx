@@ -6,7 +6,9 @@ import { useEffect, useState } from "react";
 import { api, ApiError, type JobResponse, type Voice } from "@/lib/api";
 import { MenuIcon } from "@/components/icons";
 import { VoiceSheet } from "@/components/VoiceSheet";
+import { AudioSettingsSheet } from "@/components/AudioSettingsSheet";
 import { friendlyVoiceName, localeDisplayName } from "@/lib/locale-names";
+import { useAudioSettings } from "@/lib/audio-settings";
 
 const MAX_CHARS = 500;
 
@@ -18,13 +20,15 @@ export default function CreateTtsPage() {
   const [job, setJob] = useState<JobResponse | null>(null);
   const [voice, setVoice] = useState<Voice | null>(null);
   const [voiceSheetOpen, setVoiceSheetOpen] = useState(false);
+  const { settings: audioSettings, updateSettings: updateAudioSettings } = useAudioSettings();
+  const [audioSheetOpen, setAudioSheetOpen] = useState(false);
 
   async function handleGenerate() {
     if (!text.trim()) return;
     setSubmitting(true);
     setError(null);
     try {
-      const result = await api.submitTts(text.trim(), voice?.id);
+      const result = await api.submitTts(text.trim(), voice?.id, audioSettings);
       setJob(result);
       if (result.status === "failed") {
         setError(result.error ?? "Generation failed.");
@@ -101,12 +105,42 @@ export default function CreateTtsPage() {
             <path d="M9 18l6-6-6-6" />
           </svg>
         </button>
+
+        <button
+          onClick={() => setAudioSheetOpen(true)}
+          disabled={submitting}
+          className="mt-2.5 flex w-full items-center gap-3 rounded-2xl border border-border-soft bg-surface px-4 py-3.5 text-left disabled:opacity-60"
+        >
+          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-surface-2 text-text-2">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" />
+            </svg>
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[13.5px] font-medium">Audio Settings</div>
+            <div className="mt-0.5 truncate text-[11.5px] text-text-2">
+              Speed {audioSettings.speed.toFixed(1)}x · Volume {audioSettings.volume}% · Pitch {audioSettings.pitch}
+            </div>
+          </div>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" className="shrink-0">
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </button>
       </div>
 
       <VoiceSheet
         isOpen={voiceSheetOpen}
         onClose={() => setVoiceSheetOpen(false)}
         onSelect={setVoice}
+      />
+
+      <AudioSettingsSheet
+        key={audioSheetOpen ? "open" : "closed"}
+        isOpen={audioSheetOpen}
+        onClose={() => setAudioSheetOpen(false)}
+        settings={audioSettings}
+        onSave={updateAudioSettings}
       />
 
       <div className="fixed bottom-16 left-0 right-0 px-4 pb-4 pt-3" style={{ background: "linear-gradient(0deg, var(--bg) 65%, transparent)" }}>
