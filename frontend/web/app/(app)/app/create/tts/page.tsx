@@ -3,7 +3,10 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { api, ApiError, type JobResponse } from "@/lib/api";
+import { api, ApiError, type JobResponse, type Voice } from "@/lib/api";
+import { MenuIcon } from "@/components/icons";
+import { VoiceSheet } from "@/components/VoiceSheet";
+import { friendlyVoiceName, localeDisplayName } from "@/lib/locale-names";
 
 const MAX_CHARS = 500;
 
@@ -13,13 +16,15 @@ export default function CreateTtsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<JobResponse | null>(null);
+  const [voice, setVoice] = useState<Voice | null>(null);
+  const [voiceSheetOpen, setVoiceSheetOpen] = useState(false);
 
   async function handleGenerate() {
     if (!text.trim()) return;
     setSubmitting(true);
     setError(null);
     try {
-      const result = await api.submitTts(text.trim());
+      const result = await api.submitTts(text.trim(), voice?.id);
       setJob(result);
       if (result.status === "failed") {
         setError(result.error ?? "Generation failed.");
@@ -75,7 +80,34 @@ export default function CreateTtsPage() {
             {error}
           </div>
         )}
+
+        <button
+          onClick={() => setVoiceSheetOpen(true)}
+          disabled={submitting}
+          className="mt-3 flex w-full items-center gap-3 rounded-2xl border border-border-soft bg-surface px-4 py-3.5 text-left disabled:opacity-60"
+        >
+          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-surface-2 text-text-2">
+            <MenuIcon name="mic" width={16} height={16} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[13.5px] font-medium">
+              {voice ? friendlyVoiceName(voice) : "Select a voice"}
+            </div>
+            <div className="mt-0.5 truncate text-[11.5px] text-text-2">
+              {voice ? localeDisplayName(voice.locale) : "Default voice"}
+            </div>
+          </div>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" className="shrink-0">
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </button>
       </div>
+
+      <VoiceSheet
+        isOpen={voiceSheetOpen}
+        onClose={() => setVoiceSheetOpen(false)}
+        onSelect={setVoice}
+      />
 
       <div className="fixed bottom-16 left-0 right-0 px-4 pb-4 pt-3" style={{ background: "linear-gradient(0deg, var(--bg) 65%, transparent)" }}>
         <button

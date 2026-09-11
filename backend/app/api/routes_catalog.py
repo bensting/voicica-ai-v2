@@ -1,5 +1,7 @@
 """GET /catalog/voices — the synced voice list (docs/api-contract.md
-"Catalog"), read from voice_catalog (ADR 0007). Required-auth by the same
+"Catalog"), read from voice_catalog (ADR 0007). With no `locale` given,
+scopes to the target market (services/voice_catalog.py) rather than
+returning the full multi-language catalog. Required-auth by the same
 "default consistency, easy to relax later" reasoning as the rest of this
 API's soft-call endpoints — see api-contract.md's note."""
 

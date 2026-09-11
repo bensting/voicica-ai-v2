@@ -7,10 +7,19 @@ Written wholesale by app/scheduled/sync_catalog.py; read by GET
 
 import uuid
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import VoiceCatalog
+
+# product-scope.md §0's target market. GET /catalog/voices with no explicit
+# `locale` scopes to these by default — the voice picker gets a ~270-voice
+# payload instead of the full multi-language catalog (2800+ rows, almost all
+# of it languages this product doesn't serve). Structural/product config
+# (ADR 0012's file-not-table category, not an ops-tunable scalar) — revisit
+# only if the target market itself changes. Pass an explicit `locale` to
+# bypass this (e.g. future admin tooling browsing the whole catalog).
+_TARGET_MARKET_LOCALE_PREFIXES = ("th", "id", "es")
 
 
 async def list_voices(
@@ -21,6 +30,10 @@ async def list_voices(
         query = query.where(VoiceCatalog.provider == provider)
     if locale:
         query = query.where(VoiceCatalog.locale == locale)
+    else:
+        query = query.where(
+            or_(*(VoiceCatalog.locale.like(f"{p}-%") for p in _TARGET_MARKET_LOCALE_PREFIXES))
+        )
     query = query.order_by(VoiceCatalog.locale, VoiceCatalog.display_name)
     return list((await db.execute(query)).scalars().all())
 
