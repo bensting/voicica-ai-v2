@@ -42,8 +42,12 @@ def _build_providers() -> dict[str, Provider]:
 
 
 def get_provider(capability: str) -> Provider:
-    """Returns the default provider for a capability (used when the caller
-    has no specific provider to target — e.g. TTS with no voice selected).
+    """Returns the default provider for a capability, for a capability that
+    genuinely has one fixed vendor (not TTS — every TTS request already
+    knows which provider it needs, from the voice or voice model picked;
+    see get_provider_by_name below). Not called by anything in this slice
+    yet — kept for the capabilities ADR 0001 anticipates needing real
+    fallback/cost-routing logic here (Kie's image/video, once built).
     Raises if none is configured (e.g. FISH_AUDIO_API_KEY missing) — a clear
     startup-time-shaped error, not a silent None surfacing confusingly deep
     in a request.

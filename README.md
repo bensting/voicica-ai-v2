@@ -4,7 +4,7 @@ A unified backend platform for AI-generated content — text-to-speech, voice cl
 
 This is a ground-up rewrite of an earlier prototype. The rewrite exists because the original grew organically until its structure and its third-party integrations were tangled together; this version separates them from day one.
 
-> **Status: early-stage, first slice running end-to-end.** Text-to-speech (via Fish Audio) works all the way through — sign up, generate, play back, mark public — verified in a real browser against real infrastructure (Neon, Firebase, Fish Audio, Cloudflare R2), not mocked. Azure/Google/Kie, voice cloning, and Android aren't built yet. See [`docs/architecture.md`](docs/architecture.md) for the full design and [`docs/decisions/`](docs/decisions/README.md) for the reasoning behind each major choice.
+> **Status: early-stage, TTS + voice cloning running end-to-end.** Text-to-speech (Azure, Google, Fish Audio) and voice cloning (Fish Audio — train a reusable voice, then speak with it) both work all the way through — sign up, generate, play back, mark public — verified in a real browser against real infrastructure (Neon, Firebase, Azure Speech, Google Cloud TTS, Fish Audio, Cloudflare R2), not mocked. Kie and Android aren't built yet. See [`docs/architecture.md`](docs/architecture.md) for the full design and [`docs/decisions/`](docs/decisions/README.md) for the reasoning behind each major choice.
 
 ## Architecture at a glance
 

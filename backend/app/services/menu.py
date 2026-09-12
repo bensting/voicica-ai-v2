@@ -39,11 +39,31 @@ _DEFAULT_ITEMS: list[dict[str, Any]] = [
         },
     },
     {
+        "id": "voice-clone",
+        "icon": "clone",
+        "route": "/app/create/clone",
+        "enabled": True,
+        "order": 2,
+        "badge": None,
+        "labels": {
+            "en": "Clone Your Voice",
+            "th": "โคลนเสียงของคุณ",
+            "id": "Klon Suara Anda",
+            "es": "Clona Tu Voz",
+        },
+        "descriptions": {
+            "en": "Train a voice from a sample, then speak in it",
+            "th": "ฝึกเสียงจากตัวอย่าง แล้วพูดด้วยเสียงนั้น",
+            "id": "Latih suara dari sampel, lalu bicara dengannya",
+            "es": "Entrena una voz a partir de una muestra y habla con ella",
+        },
+    },
+    {
         "id": "dialogue",
         "icon": "message",
         "route": "/app/create/dialogue",
         "enabled": False,
-        "order": 2,
+        "order": 3,
         "badge": None,
         "labels": {
             "en": "Text to Dialogue",
@@ -63,7 +83,7 @@ _DEFAULT_ITEMS: list[dict[str, Any]] = [
         "icon": "image",
         "route": "/app/create/image",
         "enabled": False,
-        "order": 3,
+        "order": 4,
         "badge": None,
         "labels": {
             "en": "AI Image",
@@ -83,7 +103,7 @@ _DEFAULT_ITEMS: list[dict[str, Any]] = [
         "icon": "wand",
         "route": "/app/create/bg-remove",
         "enabled": False,
-        "order": 4,
+        "order": 5,
         "badge": None,
         "labels": {
             "en": "BG Remover & HD Upscaler",
@@ -103,7 +123,7 @@ _DEFAULT_ITEMS: list[dict[str, Any]] = [
         "icon": "download",
         "route": "/app/create/video-download",
         "enabled": False,
-        "order": 5,
+        "order": 6,
         "badge": "popular",
         "labels": {
             "en": "Video Downloader",

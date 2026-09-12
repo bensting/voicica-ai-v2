@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ErrorBody(BaseModel):
@@ -23,10 +23,18 @@ class MeResponse(BaseModel):
 
 class TTSRequest(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
-    voice_id: uuid.UUID = Field(
+    voice_id: uuid.UUID | None = Field(
+        default=None,
         description="A voice_catalog row's id (GET /catalog/voices) — picking a voice picks the "
-        "provider it belongs to. Required: Fish Audio is reserved for a user's own cloned "
-        "voices (ADR 0009, not yet built), not a general fallback, so there is no default voice.",
+        "provider it belongs to. Exactly one of voice_id/voice_model_id is required (no "
+        "default voice — Fish Audio isn't a general fallback, it's reserved for a user's own "
+        "cloned voices, see voice_model_id below).",
+    )
+    voice_model_id: uuid.UUID | None = Field(
+        default=None,
+        description="A voice_models row's id (GET /voice-models) — a user's own cloned voice "
+        "(ADR 0009) instead of a catalog voice. Exactly one of voice_id/voice_model_id "
+        "is required.",
     )
     # Same 3-parameter, provider-agnostic scale for every provider (docs/api-contract.md):
     # speed 0.5-2.0x, volume/pitch 1-100 centered on 50. Each adapter converts to its own
@@ -40,6 +48,12 @@ class TTSRequest(BaseModel):
     # fact via PATCH /jobs/{id} (which still exists, for changing your mind
     # later — this doesn't replace it, just adds the earlier option).
     visibility: str = Field(default="private", pattern="^(private|public)$")
+
+    @model_validator(mode="after")
+    def _exactly_one_voice(self) -> "TTSRequest":
+        if (self.voice_id is None) == (self.voice_model_id is None):
+            raise ValueError("Provide exactly one of voice_id or voice_model_id.")
+        return self
 
 
 class VoiceCatalogResponse(BaseModel):
@@ -65,6 +79,18 @@ class LanguageOption(BaseModel):
 
     language: str
     voice_count: int
+
+
+class VoiceModelResponse(BaseModel):
+    """GET /voice-models — one of the current user's own cloned voices
+    (ADR 0009). Only `ready` ones are ever returned (services/voice_models.py)."""
+
+    id: uuid.UUID
+    provider: str
+    state: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 class JobResponse(BaseModel):

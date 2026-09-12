@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.models import Asset, CreditHold, Job
+from app.models.models import Asset, CreditHold, Job, VoiceModel
 from app.providers.base import JobRef
 from app.providers.registry import get_provider_by_name
 from app.services import assets as assets_service
@@ -24,7 +24,8 @@ async def submit_tts(
     *,
     user_id: str,
     text: str,
-    voice_id: uuid.UUID,
+    voice_id: uuid.UUID | None = None,
+    voice_model_id: uuid.UUID | None = None,
     speed: float = 1.0,
     volume: int = 50,
     pitch: int = 50,
@@ -32,17 +33,23 @@ async def submit_tts(
 ) -> Job:
     """Submit a TTS job. Raises credits.InsufficientCreditsError before
     anything reaches a provider if the user can't afford the estimated cost;
-    raises ValueError if voice_id doesn't match a known voice_catalog row.
+    raises ValueError if voice_id/voice_model_id doesn't resolve to a real,
+    owned voice.
 
-    Which provider gets called is decided by the voice, not the capability:
-    a voice_catalog row carries its own provider + provider_voice_id + locale
-    (docs/data-model.md), so picking a voice IS picking a provider.
-    `voice_id` is required — Fish Audio isn't a general "no voice selected"
-    fallback, it's reserved for a user's own cloned voices (ADR 0009, not
-    yet built); there is no product-sensible default voice to fall back to
-    without one (an earlier version of this defaulted to Fish Audio's own
-    generic voice, which had nothing to do with what the picker actually
-    offers — schemas.TTSRequest.voice_id has no default for the same reason).
+    Which provider gets called is decided by the voice, not the capability —
+    exactly one of two kinds of voice is given (schemas.TTSRequest enforces
+    this with a model_validator, so this function trusts it's already true):
+    - `voice_id`: a `voice_catalog` row, which carries its own provider +
+      provider_voice_id + locale (docs/data-model.md) — picking a voice IS
+      picking a provider.
+    - `voice_model_id`: a `voice_models` row (ADR 0009) — a voice the caller
+      has cloned themselves. Currently always `provider="fish_audio"` (the
+      only provider this slice's cloning is built against); the row must
+      belong to `user_id` and be `state="ready"`, or this raises ValueError.
+    Neither is optional at the HTTP layer — Fish Audio isn't a general "no
+    voice selected" fallback (an earlier version of this defaulted to its
+    own generic voice, which had nothing to do with what the picker actually
+    offers), so there is no product-sensible default to fall back to.
 
     speed/volume/pitch use one provider-agnostic scale (schemas.TTSRequest:
     speed 0.5-2.0x, volume/pitch 1-100 centered on 50) passed through to
@@ -66,21 +73,31 @@ async def submit_tts(
         relative scale)."""
     estimated_cost = await credits.estimate_tts_cost(db, text)
 
-    voice = await voice_catalog_service.get_voice(db, voice_id)
-    if voice is None:
-        raise ValueError(f"Unknown voice_id={voice_id!r}")
-    provider_name = voice.provider
-    provider_voice_id = voice.provider_voice_id
-    locale = voice.locale
+    locale: str | None = None
+    if voice_model_id is not None:
+        owned_voice = await db.get(VoiceModel, voice_model_id)
+        if owned_voice is None or owned_voice.user_id != user_id or owned_voice.state != "ready":
+            raise ValueError(f"Unknown or not-ready voice_model_id={voice_model_id!r}")
+        provider_name = owned_voice.provider
+        provider_voice_id = owned_voice.provider_model_id
+    else:
+        voice = await voice_catalog_service.get_voice(db, voice_id)
+        if voice is None:
+            raise ValueError(f"Unknown voice_id={voice_id!r}")
+        provider_name = voice.provider
+        provider_voice_id = voice.provider_voice_id
+        locale = voice.locale
 
     job = Job(
         user_id=user_id,
         capability="tts",
         provider=provider_name,
         status="pending",
+        voice_model_id=voice_model_id,
         input={
             "text": text,
-            "voice_id": str(voice_id),
+            "voice_id": str(voice_id) if voice_id else None,
+            "voice_model_id": str(voice_model_id) if voice_model_id else None,
             "speed": speed,
             "volume": volume,
             "pitch": pitch,
@@ -113,9 +130,10 @@ async def submit_tts(
     elif job_ref.status == "failed":
         await _complete_failure(db, job=job, credit_hold=credit_hold, error=job_ref.error)
     else:
-        # Azure/Google never return pending/processing — this branch exists
-        # because the interface (ADR 0002) is shared with async providers
-        # (Kie, later; Fish Audio too, once voice cloning training exists).
+        # None of the TTS-capable providers (Azure/Google/Fish Audio) ever
+        # return pending/processing — this branch exists only because the
+        # interface (ADR 0002) is shared with genuinely async providers
+        # (Kie, later).
         job.status = job_ref.status
         job.provider_state = job_ref.provider_state
 
@@ -124,6 +142,96 @@ async def submit_tts(
     # after this response must see the committed row, not a race against
     # request-teardown timing. (get_db()'s own commit becomes a harmless
     # no-op on top of this.)
+    await db.commit()
+    return job
+
+
+async def submit_voice_model_training(
+    db: AsyncSession,
+    *,
+    user_id: str,
+    title: str,
+    audio_bytes: bytes,
+    audio_filename: str,
+    reference_text: str | None = None,
+) -> Job:
+    """Submit a voice-cloning job (ADR 0009) — an ordinary job like `tts`,
+    just with `capability="voice_model_training"` and a `voice_models` row
+    as its success output instead of an `assets` row. Fish Audio only for
+    now (the only provider this product has a verified cloning integration
+    against — ADR 0009's own open item on Azure/Google is still open).
+
+    **Free** (`estimated_cost=0`): the prior project never charged for
+    training a clone either (only for *using* one to generate speech, at
+    the ordinary per-character TTS rate) — this ports that verified,
+    already-shipped pricing rather than inventing a number, and resolves
+    ADR 0009's "exact credit cost of training" open item. Still goes
+    through the normal hold->settle/release lifecycle at that $0 amount
+    rather than skipping it, so training jobs get the same audit trail
+    (credit_transactions rows) and no-charge-on-failure guarantee as
+    every other capability, for free (pun intended).
+
+    Fish Audio's `train_mode="fast"` (the only mode this adapter uses,
+    `providers/fish_audio.py`) is synchronous — verified against the real
+    API: the model is already `state: "trained"` in the same response that
+    creates it, no polling needed. So this looks exactly like `submit_tts`'s
+    shape: submit, get back an already-terminal `JobRef`, done."""
+    estimated_cost = 0
+
+    job = Job(
+        user_id=user_id,
+        capability="voice_model_training",
+        provider="fish_audio",
+        status="pending",
+        input={"title": title, "reference_text": reference_text},
+        estimated_cost=estimated_cost,
+    )
+    db.add(job)
+    await db.flush()  # assigns job.id
+
+    credit_hold = await credits.hold(db, user_id=user_id, job_id=job.id, amount=estimated_cost)
+    job.hold_id = credit_hold.id
+
+    provider = get_provider_by_name("fish_audio")
+    job_ref: JobRef = await provider.submit(
+        "voice_model_training",
+        {
+            "title": title,
+            "audio_bytes": audio_bytes,
+            "audio_filename": audio_filename,
+            "reference_text": reference_text,
+        },
+    )
+
+    if job_ref.status == "succeeded":
+        output = job_ref.output or {}
+        actual_cost = job.estimated_cost
+        await credits.settle(db, credit_hold, actual_cost)
+
+        voice_model = VoiceModel(
+            user_id=user_id,
+            provider="fish_audio",
+            provider_model_id=output["provider_model_id"],
+            state="ready" if output.get("state") == "trained" else "training",
+            created_from_job_id=job.id,
+        )
+        db.add(voice_model)
+        await db.flush()  # assigns voice_model.id
+
+        job.status = "succeeded"
+        job.actual_cost = actual_cost
+        job.completed_at = datetime.now(UTC)
+        job.voice_model_id = voice_model.id
+        job.output = {"voice_model_id": str(voice_model.id)}
+    elif job_ref.status == "failed":
+        await _complete_failure(db, job=job, credit_hold=credit_hold, error=job_ref.error)
+    else:
+        # Fast-mode training is synchronous (verified) — this branch exists
+        # only for interface parity with ADR 0002's async-provider shape.
+        job.status = job_ref.status
+        job.provider_state = job_ref.provider_state
+
+    # See submit_tts's comment above on why this commit is explicit.
     await db.commit()
     return job
 

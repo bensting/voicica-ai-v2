@@ -41,6 +41,30 @@ async function request<T>(
   return res.json();
 }
 
+/** Same auth + error-unwrapping as request(), for the one endpoint that
+ * sends a file (`POST /voice-models`) — a FormData body needs the browser
+ * to set its own multipart boundary, so this deliberately never sets
+ * Content-Type the way request() always does. */
+async function requestForm<T>(path: string, formData: FormData): Promise<T> {
+  const token = await auth.currentUser?.getIdToken();
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const err = body?.error;
+    throw new ApiError(
+      res.status,
+      err?.code ?? "error",
+      err?.message ?? `Request failed with ${res.status}`,
+    );
+  }
+  return res.json();
+}
+
 // ---- Shapes mirroring backend/app/api/schemas.py ----
 
 export interface MeResponse {
@@ -55,8 +79,21 @@ export interface JobResponse {
   capability: string;
   provider: string;
   status: "pending" | "processing" | "succeeded" | "failed";
-  input: { text: string; voice_id: string | null; speed: number; volume: number; pitch: number };
-  output: { asset_url: string | null } | null;
+  // Shape depends on `capability` — tts vs. voice_model_training (ADR 0009)
+  // have different input fields; both optional here rather than a
+  // discriminated union, since every call site only ever reads one or two
+  // fields of whichever job it already knows it has.
+  input: {
+    text?: string;
+    voice_id?: string | null;
+    voice_model_id?: string | null;
+    speed?: number;
+    volume?: number;
+    pitch?: number;
+    title?: string;
+    reference_text?: string | null;
+  };
+  output: { asset_url?: string | null; voice_model_id?: string } | null;
   error: string | null;
   estimated_cost: number;
   actual_cost: number | null;
@@ -114,6 +151,17 @@ export interface LanguageOption {
   voice_count: number;
 }
 
+/** GET /voice-models — one of the current user's own cloned voices (ADR
+ * 0009). Only `ready` ones are ever returned. `id` is what submitTts()'s
+ * `voiceModelId` option expects — the voice_model_id counterpart to a
+ * catalog Voice's `id`. */
+export interface VoiceModel {
+  id: string;
+  provider: string;
+  state: string;
+  created_at: string;
+}
+
 export const api = {
   me: () => request<MeResponse>("/me"),
 
@@ -123,20 +171,27 @@ export const api = {
   getMenu: (locale: string = "en") =>
     request<MenuItem[]>(`/config/menu?locale=${encodeURIComponent(locale)}`),
 
-  /** `voiceId` is required by the backend (schemas.TTSRequest) — Fish Audio
-   * isn't a general fallback (reserved for a user's own cloned voices,
-   * ADR 0009), so there's no default voice to omit this for. `options`
+  /** A voice is required by the backend (schemas.TTSRequest) — Fish Audio
+   * isn't a general fallback, so there's no default to omit this for.
+   * Exactly one of the two voice sources: `voiceId` (a catalog Voice's
+   * `id`) or `voiceModelId` (a user's own cloned VoiceModel's `id`, ADR
+   * 0009) — the backend routes to the right provider either way. `options`
    * (speed/volume/pitch, lib/audio-settings.ts — defaults to a no-op
    * 1.0/50/50 when omitted; visibility — ADR 0010, defaults to "private")
    * is otherwise optional. */
   submitTts: (
     text: string,
-    voiceId: string,
+    voice: { voiceId: string } | { voiceModelId: string },
     options?: { speed: number; volume: number; pitch: number; visibility?: "private" | "public" },
   ) =>
     request<JobResponse>("/generate/tts", {
       method: "POST",
-      body: JSON.stringify({ text, voice_id: voiceId, ...options }),
+      body: JSON.stringify({
+        text,
+        voice_id: "voiceId" in voice ? voice.voiceId : undefined,
+        voice_model_id: "voiceModelId" in voice ? voice.voiceModelId : undefined,
+        ...options,
+      }),
     }),
 
   /** Every base language actually present in the catalog (83 across
@@ -163,6 +218,31 @@ export const api = {
   },
 
   listJobs: () => request<JobResponse[]>("/jobs"),
+
+  /** GET /voice-models — the current user's own cloned voices (ADR 0009),
+   * ready ones only. Feeds the Clone page's "Generate" tab and the
+   * VoiceSheet-style picker there. */
+  listVoiceModels: () => request<VoiceModel[]>("/voice-models"),
+
+  /** POST /voice-models — train a new cloned voice from a short audio
+   * sample. Multipart (not JSON, unlike every other endpoint here) because
+   * it carries a file; returns a JobResponse like any other submission —
+   * training turned out synchronous (Fish Audio's `train_mode="fast"`,
+   * verified — backend/README.md), so the response is already terminal,
+   * same as a TTS job. `referenceText` (what the sample audio says) is
+   * optional but improves cloning quality, per Fish Audio's own docs. */
+  trainVoiceModel: (title: string, audio: Blob, audioFileName: string, referenceText?: string) => {
+    const formData = new FormData();
+    formData.set("title", title);
+    if (referenceText) formData.set("reference_text", referenceText);
+    formData.set("audio", audio, audioFileName);
+    return requestForm<JobResponse>("/voice-models", formData);
+  },
+
+  /** DELETE /voice-models/{id} — owner-only (ADR 0009); best-effort deletes
+   * the model at Fish Audio too (services/voice_models.py), so this is
+   * permanent, not a soft "hide" the user could undo. */
+  deleteVoiceModel: (id: string) => request<void>(`/voice-models/${id}`, { method: "DELETE" }),
 
   /** Public — no auth needed (ADR 0010), though every call here still
    * carries a Bearer token since request() always attaches one when a user

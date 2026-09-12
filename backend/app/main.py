@@ -12,6 +12,7 @@ from app.api import (
     routes_jobs,
     routes_me,
     routes_tts,
+    routes_voice_models,
 )
 from app.api.errors import register_error_handlers
 from app.core.config import get_settings
@@ -32,6 +33,7 @@ register_error_handlers(app)
 
 app.include_router(routes_me.router)
 app.include_router(routes_tts.router)
+app.include_router(routes_voice_models.router)
 app.include_router(routes_jobs.router)
 app.include_router(routes_gallery.router)
 app.include_router(routes_catalog.router)

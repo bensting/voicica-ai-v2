@@ -32,7 +32,7 @@ export default function CreateTtsPage() {
     setSubmitting(true);
     setError(null);
     try {
-      const result = await api.submitTts(text.trim(), voice.id, {
+      const result = await api.submitTts(text.trim(), { voiceId: voice.id }, {
         ...audioSettings,
         visibility: shareToExplore ? "public" : "private",
       });

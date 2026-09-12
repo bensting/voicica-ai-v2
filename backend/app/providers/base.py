@@ -54,3 +54,12 @@ class Provider(ABC):
         raise NotImplementedError(
             f"{type(self).__name__} is synchronous; poll() should never be called for it"
         )
+
+    async def delete_voice_model(self, provider_model_id: str) -> None:
+        """Delete a previously-trained voice model (ADR 0009) at the vendor.
+        Only providers that support voice cloning implement this — the
+        default raises so `services/voice_models.py` (which depends only on
+        this interface, never a concrete adapter, per ADR 0001) gets a clear
+        error rather than a silent no-op if it's ever called against a
+        provider that can't clone voices."""
+        raise NotImplementedError(f"{type(self).__name__} doesn't support voice cloning")

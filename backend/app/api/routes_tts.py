@@ -28,6 +28,7 @@ async def create_tts_job(
             user_id=user.id,
             text=body.text,
             voice_id=body.voice_id,
+            voice_model_id=body.voice_model_id,
             speed=body.speed,
             volume=body.volume,
             pitch=body.pitch,

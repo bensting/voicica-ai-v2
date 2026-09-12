@@ -90,7 +90,16 @@ class Job(Base):
     actual_cost: Mapped[int | None] = mapped_column(Integer, nullable=True)
     hold_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("credit_holds.id"), nullable=True)
 
-    voice_model_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)  # reserved, ADR 0009 (not in this slice)
+    # Set when this TTS job used an owned, cloned voice (ADR 0009) instead of
+    # a voice_catalog row — mutually exclusive with input["voice_id"]; also
+    # set (to the row it created) on a voice_model_training job itself.
+    # ON DELETE SET NULL (migration 0007, fixed after a real test caught
+    # Postgres's default RESTRICT blocking `DELETE /voice-models/{id}` on a
+    # voice any job — training or TTS — had ever referenced): a job's
+    # history should survive its voice being deleted, not pin it forever.
+    voice_model_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("voice_models.id", ondelete="SET NULL"), nullable=True
+    )
     visibility: Mapped[str] = mapped_column(String(8), default="private")  # private | public (ADR 0010)
 
     created_at: Mapped[datetime] = mapped_column(_TZ, server_default=func.now())
@@ -150,6 +159,27 @@ class VoiceCatalog(Base):
     gender: Mapped[str | None] = mapped_column(String(16), nullable=True)
     styles: Mapped[list | None] = mapped_column(JSONB, nullable=True)  # supported emotions/styles, if any
     synced_at: Mapped[datetime] = mapped_column(_TZ, server_default=func.now())
+
+
+class VoiceModel(Base):
+    """One row per voice a user has cloned (ADR 0009) — a durable asset the
+    user owns, not subject to R2 retention (ADR 0004) the way generated
+    media is; persists until deleted. Created by a `voice_model_training`
+    job (`created_from_job_id`, audit-only — nothing depends on it at read
+    time); consumed by an ordinary `tts` job that sets `Job.voice_model_id`
+    instead of picking a `voice_catalog` row."""
+
+    __tablename__ = "voice_models"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(32))  # fish_audio only for now (ADR 0009's open item)
+    provider_model_id: Mapped[str] = mapped_column(String(128))  # Fish Audio's own model _id
+    state: Mapped[str] = mapped_column(String(16), default="training")  # training | ready | failed
+    created_from_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("jobs.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(_TZ, server_default=func.now())
 
 
 class AppSetting(Base):

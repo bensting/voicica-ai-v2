@@ -27,6 +27,14 @@ const icons: Record<string, (props: SVGProps<SVGSVGElement>) => React.ReactEleme
       <path d="M21 15l-5-5L5 21" />
     </svg>
   ),
+  clone: (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...props}>
+      <path d="M12 1a3 3 0 00-3 3v6a3 3 0 006 0V4a3 3 0 00-3-3z" />
+      <path d="M17 8v2a5 5 0 01-10 0V8" />
+      <line x1="12" y1="15" x2="12" y2="19" />
+      <path d="M4 21c0-2.2 3.6-4 8-4s8 1.8 8 4" strokeDasharray="2.2 2.2" />
+    </svg>
+  ),
   wand: (props) => (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" {...props}>
       <path d="M15 4V2M15 16v-2M8 9h2M20 9h2M17.8 11.8L19 13M17.8 6.2L19 5M12.2 11.8L11 13M12.2 6.2L11 5" />
