@@ -14,8 +14,8 @@ from sqlalchemy.orm import selectinload
 from app.models.models import Asset, CreditHold, Job, VoiceModel
 from app.providers.base import JobRef
 from app.providers.registry import get_provider_by_name
+from app.services import app_settings, credits
 from app.services import assets as assets_service
-from app.services import credits
 from app.services import voice_catalog as voice_catalog_service
 
 
@@ -123,6 +123,15 @@ async def submit_tts(
         "provider_voice_id": provider_voice_id,
         "locale": locale,
     }
+    if provider_name == "fish_audio":
+        # Which Fish Audio TTS model to use is an app_settings value (ADR
+        # 0012), not a hardcoded constant in providers/fish_audio.py — read
+        # fresh per-request (no caching), same as tts_credits_per_10_chars,
+        # so bumping it to whatever Fish recommends next is a
+        # PATCH /admin/settings/fish_tts_model, not a deploy. Only fetched
+        # for this provider — Azure/Google have no equivalent concept, no
+        # reason to pay the extra lookup on their requests.
+        provider_inputs["model"] = await app_settings.get_setting(db, "fish_tts_model")
     job_ref: JobRef = await provider.submit("tts", provider_inputs)
 
     if job_ref.status == "succeeded":

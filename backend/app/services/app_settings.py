@@ -15,6 +15,12 @@ from app.models.models import AppSetting
 _DEFAULTS: dict[str, Any] = {
     "signup_bonus_credits": 500,
     "tts_credits_per_10_chars": 1,
+    # Fish Audio's TTS model (providers/fish_audio.py) — a scalar an admin
+    # should be able to bump the moment Fish ships a new recommended model,
+    # without a deploy. Read fresh per-request (no caching), same as
+    # tts_credits_per_10_chars above; PATCH /admin/settings/fish_tts_model
+    # (already generic, no new endpoint needed) is how it's changed.
+    "fish_tts_model": "s2.1-pro",
 }
 
 

@@ -20,6 +20,8 @@ Admin's minimal scope for the current slice ([ADR 0005](0005-frontend-surfaces.m
 
 Seeded initial values (placeholders, tunable anytime, not a business decision this ADR is making): `signup_bonus_credits = 500`, `tts_credits_per_10_chars = 1`.
 
+**A third kind of value turned out to fit here too, not just business/ops levers**: `fish_tts_model` (which Fish Audio TTS model `providers/fish_audio.py` sends — added when a user asked how a future Fish Audio model upgrade would be handled). It's a single scalar an *engineer* would change, not growth/ops — but the reason it belongs here is the same one this ADR already argues: the value can change on the *vendor's* schedule, not ours, and a config row an admin can `PATCH` immediately is strictly better than a code change + deploy for something that's just "which string do we send," with no logic attached to which value it is.
+
 ## Alternatives considered
 
 - **Put these in the same config file as Kie's catalog.** Rejected: conflates an engineering-curated structural catalog with a business lever someone outside engineering wants to flip, and forces a deploy for either kind of change — the wrong cost for the business-lever category specifically.
