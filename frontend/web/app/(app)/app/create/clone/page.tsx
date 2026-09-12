@@ -177,7 +177,7 @@ function GenerateTab({
                 <path d="M19 10v2a7 7 0 01-14 0v-2" />
               </svg>
             </div>
-            <div className="min-w-0 flex-1 text-[13.5px] font-medium">My cloned voice</div>
+            <div className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{vm.title}</div>
             {selectedId === vm.id && (
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--a3)" strokeWidth="2.2">
                 <polyline points="20,6 9,17 4,12" />
@@ -366,7 +366,10 @@ function CloneTab({
                     <path d="M19 10v2a7 7 0 01-14 0v-2" />
                   </svg>
                 </div>
-                <div className="min-w-0 flex-1 text-[13px] font-medium">Ready</div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[13px] font-medium">{vm.title}</div>
+                  <div className="text-[11px] text-text-2">Ready</div>
+                </div>
                 <button
                   onClick={() => handleDelete(vm.id)}
                   disabled={deletingId === vm.id}

@@ -45,7 +45,7 @@ Separate endpoints per capability (not one generic `POST /jobs`) so each gets it
 
 | Method & path | Auth | Purpose |
 |---|---|---|
-| `GET /voice-models` | required | **Implemented and verified.** List the user's own trained (`ready`) voices — `{id, provider, state, created_at}` each. |
+| `GET /voice-models` | required | **Implemented and verified.** List the user's own trained (`ready`) voices — `{id, title, provider, state, created_at}` each. `title` (the name given at training time) was added after a real incident: without it, every voice was an identical, indistinguishable placeholder in the picker, and that's exactly how someone else's real cloned voice got mistaken for test data and deleted — always render it. |
 | `DELETE /voice-models/{id}` | required, owner only | **Implemented and verified.** Delete an owned voice — 204, permanent. Deletes at the provider too (best-effort: a failure there is logged and doesn't block removing the local row — verified with a real case, see below). |
 
 (Training goes through `POST /voice-models` above and is polled via `GET /jobs/{id}` like any other job — no separate poll endpoint, since it's synchronous in practice.)

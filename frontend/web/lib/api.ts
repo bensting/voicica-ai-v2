@@ -154,9 +154,13 @@ export interface LanguageOption {
 /** GET /voice-models — one of the current user's own cloned voices (ADR
  * 0009). Only `ready` ones are ever returned. `id` is what submitTts()'s
  * `voiceModelId` option expects — the voice_model_id counterpart to a
- * catalog Voice's `id`. */
+ * catalog Voice's `id`. `title` is the name given at training time —
+ * always show it: an earlier version of this had no name at all, every
+ * voice rendered as an identical placeholder, and that's exactly how a
+ * real cloned voice got mistaken for test data and deleted. */
 export interface VoiceModel {
   id: string;
+  title: string;
   provider: string;
   state: string;
   created_at: string;

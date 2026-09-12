@@ -210,6 +210,7 @@ async def submit_voice_model_training(
 
         voice_model = VoiceModel(
             user_id=user_id,
+            title=title,
             provider="fish_audio",
             provider_model_id=output["provider_model_id"],
             state="ready" if output.get("state") == "trained" else "training",

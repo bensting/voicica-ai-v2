@@ -173,6 +173,12 @@ class VoiceModel(Base):
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    # The name the user gave it at training time (POST /voice-models' `title`
+    # form field) — added after a real incident: with no name stored, every
+    # voice rendered as an identical, indistinguishable placeholder in the
+    # picker, which is exactly how someone else's real cloned voice got
+    # mistaken for leftover test data and deleted (migration 0008).
+    title: Mapped[str] = mapped_column(String(50))
     provider: Mapped[str] = mapped_column(String(32))  # fish_audio only for now (ADR 0009's open item)
     provider_model_id: Mapped[str] = mapped_column(String(128))  # Fish Audio's own model _id
     state: Mapped[str] = mapped_column(String(16), default="training")  # training | ready | failed

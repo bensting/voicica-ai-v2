@@ -83,9 +83,14 @@ class LanguageOption(BaseModel):
 
 class VoiceModelResponse(BaseModel):
     """GET /voice-models — one of the current user's own cloned voices
-    (ADR 0009). Only `ready` ones are ever returned (services/voice_models.py)."""
+    (ADR 0009). Only `ready` ones are ever returned (services/voice_models.py).
+    `title` is the name given at training time — added after a real incident
+    where its absence made every voice render as an identical, indistinguishable
+    placeholder, and someone else's real cloned voice got mistaken for
+    leftover test data and deleted."""
 
     id: uuid.UUID
+    title: str
     provider: str
     state: str
     created_at: datetime
