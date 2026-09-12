@@ -58,6 +58,8 @@ graph TD
 
 **Rule:** `services/` never imports a concrete provider (`azure.py`, `google.py`, ...) directly — only the `base.py` interface and the `registry.py` selector. This is what makes swapping or adding a vendor a one-file change. See [ADR 0001](decisions/0001-provider-adapter-layer.md) for why this boundary exists.
 
+**Since [ADR 0014](decisions/0014-background-job-execution.md)**: this diagram's `services/` still owns 100% of the business logic (resolving a voice, calling the right provider via `registry.py`, settling/releasing credits) — that hasn't moved. What changed is *when* it runs: `submit_tts()` (called from `api/`) now only creates the `Job` + hold and enqueues; the provider-calling part is a separate function in the same module (e.g. `execute_tts_job(db, job_id)`) that an arq worker task calls with its own DB session, not the request's. `worker/` is thin arq-specific plumbing around that — it doesn't contain business logic of its own. `core/queue.py` (the enqueue helper) is the one new thing `services/` reaches for, alongside `registry.py`.
+
 ## 3. Request flow — unified async job model
 
 Every capability, regardless of the underlying provider's native call shape, is exposed as **submit → poll a job** (see [ADR 0002](decisions/0002-unified-async-job-model.md)). A synchronous provider just finishes the work before the first response goes out; an asynchronous one doesn't.
@@ -110,28 +112,39 @@ sequenceDiagram
     end
 ```
 
-### 3c. Synchronous provider (Azure/Google) — same contract, no waiting
+### 3c. Synchronous-native provider (Azure/Google/Fish) — same contract, worker does the wait
+
+**Changed by [ADR 0014](decisions/0014-background-job-execution.md)** — the diagram below is the current shape; the note after it is what this replaced and why.
 
 ```mermaid
 sequenceDiagram
     participant C as Client (frontend)
     participant A as api/ (FastAPI route)
-    participant S as services/
+    participant S as services/jobs.py
+    participant Q as Redis (arq queue)
+    participant W as arq worker task
     participant P as providers/azure.py
     participant V as Azure Speech API
 
     C->>A: POST /generate/tts { voice, text }
-    A->>S: submit("tts", inputs)
-    S->>P: submit(inputs)
+    A->>S: submit_tts(...)
+    S->>S: create Job(pending), hold credits, commit
+    S->>Q: enqueue task(job_id)
+    S-->>A: Job { status: pending }
+    A-->>C: 202 { job_id, status: pending }
+    Q->>W: dispatch (own DB session, not the request's)
+    W->>P: submit(inputs)
     P->>V: synthesize (blocking call)
-    V-->>P: audio bytes / URL
-    P-->>S: JobRef(status=succeeded, result=...)
-    S->>S: write Job row (status=succeeded)
-    S-->>A: Job { status: succeeded, result }
-    A-->>C: 200 { status: succeeded, result }
+    V-->>P: audio bytes
+    P-->>W: JobRef(status=succeeded, result=...)
+    W->>W: settle credits, upload to R2, write Job row (status=succeeded)
+    loop client polls until terminal
+        C->>A: GET /jobs/{id}
+        A-->>C: 200 { status, result? }
+    end
 ```
 
-The frontend can choose to treat 3c as "instant" (it already has the result on the first response) while showing a progress state for 3a/3b — that's a UI decision, not a different API contract.
+Before ADR 0014, step "W" happened inline inside the request handler — `submit_tts()` itself did `await provider.submit(...)` and only returned once the vendor responded, so the first response really was already terminal. That fell over at very modest concurrency (the request's DB session was held for the whole vendor round-trip against a default 15-connection pool; Fish Audio's own account allows only 5 concurrent requests) — see ADR 0014 for the concrete numbers. The API shape (`202` + a `job_id` + poll `GET /jobs/{id}`) hasn't changed; only where the vendor call actually happens has.
 
 If a provider fails or is over quota, the fallback path is: `registry.py` catches the failure and retries with the next provider in priority order — this logic lives entirely in the registry, so `services/` and `api/` are unaware a fallback happened.
 
@@ -146,6 +159,7 @@ Confirmed from Kie's docs — these live entirely inside `providers/kie.py`, nev
 - **Kie reports its own cost per task** (`creditsConsumed`, returned once `state` is terminal). This resolves the open item in [ADR 0003](decisions/0003-credit-ledger-hold-then-settle.md) about whether `actual_cost` can diverge from `estimated_cost` for Kie: it can, and Kie tells us exactly how much it charged, so our own pricing rule can settle `actual_cost` from Kie's `creditsConsumed` (times our own exchange rate/margin) instead of re-deriving it from request parameters.
 - **Result URLs expire ~24 hours after completion** (`resultJson.resultUrls`). Per [ADR 0004](decisions/0004-asset-mirroring-r2-retention.md), a successful job's assets are mirrored into Cloudflare R2 before that window closes, with a configurable retention period rather than kept forever.
 - **Polling policy**: start at 2–3s intervals with backoff, give up after 10–15 minutes (treat as `failed`/timeout if no terminal state by then); a `429` means back off harder. This is `kie.py`'s internal retry policy, invisible to `services/`.
+- **Under [ADR 0014](decisions/0014-background-job-execution.md), "submit" and "track to completion" are two separate execution steps, not one worker task** — see §3f below. `kie.py`'s `submit()`/`poll()` methods themselves are unchanged by this; what changes is that nothing calls `poll()` in a tight loop from within one long-lived task anymore.
 
 If we ever build against another async, catalog-style vendor, this section is the template for what "provider specifics" means in practice — vendor state enum, callback vs. polling, vendor-native cost reporting, asset lifetime all stay inside that vendor's own adapter.
 
@@ -156,6 +170,38 @@ If we ever build against another async, catalog-style vendor, this section is th
 - **Voice cloning is two calls, but the first one isn't actually async**: `POST /model` (multipart — the sample audio as `voices`, its transcript as `texts`) trains a reusable voice, returning a `model_id`. The original version of this doc assumed `state` (`created`/`training`/`trained`/`failed`) meant polling this like Kie's `recordInfo` — **corrected after actually calling it**: with `train_mode="fast"` (the only mode `fish_audio.py` uses — `"full"` mode's timing isn't verified, so isn't exposed), the create response already has `state: "trained"`, synchronously, same request. That `model_id` is then passed as `reference_id` into ordinary sync `/v1/tts` calls, any number of times, to actually generate speech in that voice — verified end-to-end (trained a real test model, spoke with it immediately, deleted it, `backend/README.md`).
 - **Implemented** ([ADR 0009](decisions/0009-voice-cloning-reusable-asset.md)): `fish_audio.py`'s "train a voice" is its own job (`capability: voice_model_training`) that creates a `voice_models` row on success instead of an `assets` row — and since training turned out synchronous too, it's exactly `submit_tts()`'s shape (`services/jobs.py submit_voice_model_training()`), no `poll()` needed. "Speak with a voice" is then just a normal `tts` job referencing that `voice_models` row via `voice_model_id`, resolved to a provider exactly like a `voice_catalog` row is (§3c above). Training is free (`estimated_cost=0`) — ports the prior project's own real pricing (never charged for cloning, only for using a clone to generate speech), resolving ADR 0009's open item on this. Whether Azure/Google have an equivalent is still unconfirmed/out of scope — Fish Audio is the only provider this integration covers.
 - **No language parameter, on either call** — a real structural difference from Azure/Google, not a gap: those APIs need an explicit locale because a voice *is* a locale there; Fish Audio's don't take one at all (verified against their docs, 2026-09-12). `POST /model` runs ASR on the sample to infer what's said (and its language) when `texts` is omitted; `POST /v1/tts`'s `s2.1-pro` is multilingual and infers the target language from the text itself, with the cloned voice's own accent carried over regardless of what language it's asked to speak.
+
+### 3f. Background job execution — queues, workers, why Kie can't block TTS ([ADR 0014](decisions/0014-background-job-execution.md))
+
+Every capability's "actually call the provider" step runs in an **arq** (asyncio-native task queue, Redis-backed) worker task, never inside the request handler — §3c's diagram is what this looks like end to end for a synchronous-native provider. The part worth a dedicated section is how queues are split, because the split is what actually delivers the guarantee "a slow or rate-limited provider can't starve a fast one":
+
+```mermaid
+graph LR
+    subgraph web ["FastAPI process"]
+        R2["route handler<br/>create Job, hold credits, enqueue"]
+    end
+    R2 -->|enqueue| Redis[("Redis")]
+    Redis --> QF["queue:fish_audio<br/>(worker concurrency: 4)"]
+    Redis --> QA["queue:azure"]
+    Redis --> QG["queue:google"]
+    Redis --> QK["queue:kie-submit<br/>(short task only)"]
+    QF --> WF["worker task:<br/>call Fish, settle, write Job"]
+    QA --> WA["worker task:<br/>call Azure, settle, write Job"]
+    QG --> WG["worker task:<br/>call Google, settle, write Job"]
+    QK --> WK["worker task:<br/>call Kie's createTask only,<br/>store provider_job_id,<br/>status=processing"]
+    Cron["arq cron (timer, not a queue)"] --> Sweep["batch-poll Kie's recordInfo<br/>for jobs still 'processing'"]
+    Webhook["POST /webhooks/kie"] --> JobRow[("jobs table")]
+    Sweep --> JobRow
+    WF --> JobRow
+    WA --> JobRow
+    WG --> JobRow
+```
+
+- **One queue per provider**, each with its own worker concurrency cap — `queue:fish_audio` is capped at 4 (Fish Audio's real, observed `ratelimit-limit-concurrency: 5`, one seat of headroom); Azure/Google get their own queues with looser, provisional caps. A burst of Fish-routed jobs queues up *inside `queue:fish_audio` only* — Azure/Google/Kie jobs keep flowing.
+- **Kie's task is deliberately short** (`queue:kie-submit`): it calls Kie's create-task API and returns — it never waits for Kie to actually finish generating. If it did, a burst of slow Kie jobs would occupy worker capacity for minutes each, and since nothing distinguishes "a worker busy for 2 seconds" from "a worker busy for 3 minutes" in a shared pool, a fast TTS job queued behind enough slow Kie jobs would wait just as long. Splitting them into separate queues makes that structurally impossible, not just unlikely.
+- **Completion tracking for Kie is a cron sweep, not a per-job wait**: the webhook (§3d) is the primary path; a periodic arq cron job batch-checks whatever's still `processing` past some age. A cron job scans many rows in one pass and moves on — it doesn't block itself on any single slow job the way a per-job polling task would.
+- **A job's DB writes always happen from a session the worker task opens itself**, never the request's own session — the request's session is done and returned to the pool the moment the job is enqueued.
+- **Enqueue can fail** (Redis unreachable) — handled as a first-class error, not an edge case: the route handler releases the just-created hold and marks the job `failed` immediately rather than returning a `202` for a job that will never run. See ADR 0014's "Enqueue failure" note.
 
 ## 4. Directory layout (backend)
 
@@ -176,14 +222,19 @@ backend/
 │   ├── scheduled/              # periodic, non-request-triggered work (ADR 0007) — calls services/ + providers/ like any request handler would
 │   │   ├── sync_catalog.py       # pulls each provider's voice/model list into our DB
 │   │   └── sweep_stuck_jobs.py    # resolves timed-out jobs to failed, releases their hold
+│   ├── worker/                # arq task definitions + WorkerSettings, one process per queue (ADR 0014)
+│   │   ├── tasks.py             # one task per provider: opens its own DB session, calls providers/, settles/releases credits
+│   │   ├── kie_submit.py         # the short "call Kie's createTask, store provider_job_id" task (queue:kie-submit)
+│   │   └── cron.py               # arq cron jobs: Kie completion sweep, stuck-job sweep (ADR 0007), catalog sync (ADR 0007)
 │   ├── api/                  # FastAPI routes — input validation, calls services/
 │   ├── models/                # Jobs, credit ledger, asset, and catalog tables (see below)
 │   └── core/
 │       ├── config.py         # provider keys, priority, fallback policy, Kie model catalog, pricing rules, R2 credentials + retention config
+│       ├── queue.py           # arq Redis pool / enqueue helper (ADR 0014) — the one place services/ reaches to enqueue a task
 │       └── auth.py            # verify_identity(token) -> (user_id, role) — wraps Firebase Admin SDK (ADR 0008); routes call this, never Firebase directly
 ```
 
-*Scheduling mechanism (what actually triggers `scheduled/`'s functions on a timer) is an open implementation choice — see [ADR 0007](decisions/0007-scheduled-tasks-module.md).*
+*Scheduling mechanism resolved by [ADR 0014](decisions/0014-background-job-execution.md): arq's cron feature runs `worker/cron.py`'s jobs (Kie completion sweep, stuck-job sweep, and eventually catalog sync) on a timer, independent of the request-serving process.*
 
 **Data model**: the full schema (tables, ER diagram, notes) lives in [`data-model.md`](data-model.md), built on Postgres ([ADR 0006](decisions/0006-database-orm-choice.md)) — not duplicated here to avoid the two drifting apart.
 
@@ -193,7 +244,7 @@ This layout is not yet implemented — it is the target structure for the first 
 
 - Frontend framework, database, and auth are all decided (Next.js — [ADR 0011](decisions/0011-frontend-framework.md); Postgres/SQLAlchemy — [ADR 0006](decisions/0006-database-orm-choice.md); Firebase Auth — [ADR 0008](decisions/0008-auth-provider.md)).
 - The Agent/AGI layer is intentionally undesigned until the backend + frontend skeleton is running end-to-end — this includes any future LLM-driven model-selection router (see [product-scope.md §1.1](product-scope.md)).
-- How the frontend learns a job is done: plain polling of `GET /jobs/{id}`, or a push mechanism (WebSocket/SSE) — not yet decided, doesn't block backend work.
+- How the frontend learns a job is done: **at minimum, polling** — [ADR 0014](decisions/0014-background-job-execution.md) makes this a real requirement now (even fast providers no longer return an already-terminal result on the first response), so `frontend/web`'s create/tts and create/clone pages need a poll loop against `GET /jobs/{id}`. A push mechanism (WebSocket/SSE) instead of polling is still an open, non-blocking enhancement on top of that.
 - Exact pricing formulas per capability/model, the top-up (payment provider) mechanism, and the exact asset retention period(s) (see [ADR 0004](decisions/0004-asset-mirroring-r2-retention.md)) are still open — all are config values to fill in during implementation, none block the schemas above.
 
 Each of these, once decided, gets its own ADR in [decisions/](decisions/README.md) rather than being folded silently into this document.

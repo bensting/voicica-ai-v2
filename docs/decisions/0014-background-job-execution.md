@@ -1,0 +1,65 @@
+# ADR 0014: Background Job Execution via Redis + arq
+
+- Status: Accepted
+- Date: 2026-09-12
+
+## Context
+
+Today, `services/jobs.py`'s `submit_tts()`/`submit_voice_model_training()` run entirely inside the request handler: create the `Job` row, hold credits, then `await provider.submit(...)` — the actual HTTP call to Azure/Google/Fish Audio — and only return once that call finishes. [ADR 0002](0002-unified-async-job-model.md) already anticipated this as one *possible* shape ("the adapter's `submit` performs the work inline... by the time the API responds"), but two things became concrete evidence this doesn't scale, not just a latency curiosity:
+
+- **The DB session for the whole request is held open for the entire provider round-trip.** `core/db.py`'s engine has no explicit pool size, so SQLAlchemy's default applies: `pool_size=5` + `max_overflow=10` = **15 concurrent connections, hard ceiling**. Since a session is checked out from `get_db()` for the full duration of `submit_tts()` — including the multi-second wait on the vendor — as few as 15 concurrent generate/clone requests exhausts the pool and stalls every other request, including ones that don't even touch the same provider.
+- **Fish Audio's own API enforces a real, observed concurrency limit.** A real response from `/v1/tts` carried `ratelimit-current-concurrency: 1` / `ratelimit-limit-concurrency: 5` — this account can have at most 5 requests in flight at once, full stop. Nothing today prevents 6+ concurrent Fish-routed jobs from being attempted.
+
+Separately, Kie (not yet implemented) surfaces a third requirement: its generations take seconds to minutes, not seconds. If Kie work and TTS work shared one execution pool, a burst of slow Kie jobs would starve fast TTS jobs behind them — the "submit" and "wait for the vendor to actually finish" steps for a genuinely async provider have to be decoupled from each other, not just decoupled from the request.
+
+## Decision
+
+Redis + [arq](https://arq-docs.helpmanual.io/) (an asyncio-native task queue — chosen over Celery specifically because this codebase is fully async already: `httpx.AsyncClient`, async SQLAlchemy, async FastAPI routes; Celery's sync worker model would need a bridge in every task for no benefit here) sits between "submit" and "call the provider":
+
+1. **Route handlers only enqueue now.** `POST /generate/tts`, `POST /voice-models` (and future `POST /generate/image`/etc.) do exactly what they do today up through creating the `Job` row and holding credits, `commit`, then enqueue one arq task and return `202` immediately — no provider call happens on the request path. This makes the request's DB session lifetime milliseconds instead of "however long the vendor takes," which is what actually fixes the connection-pool math above.
+2. **One arq task per job is where ADR 0002's `submit()` contract actually gets invoked** — opening its own fresh DB session (never the request's), calling the provider, then doing exactly what `_complete_success`/`_complete_failure` do today (settle or release credits, upload to R2, write the terminal `Job` state). This logic is a near-verbatim move out of the request handler, not a rewrite.
+3. **Queues are split per provider, not shared** — so one provider's slowness or rate limit can never consume capacity a different provider's jobs need:
+   - `queue:fish_audio` — worker concurrency capped at **4** (against the observed `ratelimit-limit-concurrency: 5`, one seat of headroom). Both Fish TTS and clone training land here, since both call the same account.
+   - `queue:azure`, `queue:google` — separate queues, looser caps for now (no comparable hard limit has been observed yet; revisit the numbers if one is).
+   - `queue:kie-submit` — see below.
+4. **Kie splits into two decoupled steps, not one task**, once its adapter exists:
+   - A short `kie-submit` task calls Kie's create-task API only, stores `provider_job_id`, sets `status="processing"`, and returns — it never waits for Kie to actually finish.
+   - Completion tracking is separate: the webhook receiver (`POST /webhooks/kie`, [architecture.md §3d](../architecture.md)) is the primary path; a periodic **arq cron job** (not a queue task — runs on a timer, not per-submission) sweeps jobs still `processing` past some age and polls Kie's `recordInfo` for them in one batched pass. A cron sweep never blocks itself waiting on one slow job the way a per-job worker task would.
+5. **Transient provider failures get one automatic retry** (arq's built-in retry-with-backoff) before falling back to `failed`/credit-release; a provider's definitive rejection (4xx-shaped) does not retry. (Concretely: the real "Fish Audio request failed" transient timeout hit once during this project's own testing — a bare network hiccup, succeeded instantly on a manual second click — would have self-healed under this policy without the user needing to retry by hand.)
+6. **This is also the scheduling mechanism [ADR 0007](0007-scheduled-tasks-module.md) left open.** Its "stuck-job sweep" (not yet built) and the Kie polling sweep above both become arq cron jobs; `sync_catalog.py` (currently run manually) can move to a cron job too once a sync cadence is picked.
+7. **Deployment shape**: one Redis instance; the existing FastAPI/uvicorn process (now enqueues instead of executing); one or more separate worker processes (`arq app.worker.WorkerSettings`, one per queue or one process handling several — an implementation detail, not fixed here). Three kinds of container/process once Dockerized, same codebase, different entrypoints.
+
+### Enqueue failure is a first-class error path, not an edge case
+
+A credit hold is created and committed *before* the enqueue call. If Redis is unreachable at that moment, the job must not sit `pending` forever with credits locked: the route handler catches an enqueue failure, immediately releases the hold and marks the job `failed` (same helper `_complete_failure` already uses), and returns a `503`-shaped error to the client rather than a false `202`.
+
+## Alternatives considered
+
+- **FastAPI `BackgroundTasks` (in-process).** Seriously considered — zero new infrastructure. Rejected as the long-term shape: doesn't survive a process restart mid-task (an in-flight job silently vanishes on deploy), and gives no real per-provider concurrency control (nothing caps "how many background tasks are hitting Fish Audio right now" independent of how many other unrelated background tasks the same process happens to be running). It solves "stop holding the request open" but neither of the other two problems this ADR exists for.
+- **Database-polled worker, extending `app/scheduled/`, no new infra.** The honest runner-up — no new dependency, fits the existing scheduled-tasks concept. Rejected for now: a poll interval directly trades against the product's stated speed priority ([product-scope.md §0](../product-scope.md)) for what are today sub-few-second provider calls, and building real per-provider concurrency control on top of it (`SELECT ... FOR UPDATE SKIP LOCKED` plus hand-rolled semaphores) ends up reinventing most of what arq already provides for free. Worth revisiting if Redis ever becomes unavailable in wherever this ends up hosted.
+- **Celery + Redis/RabbitMQ.** Rejected: Celery's execution model is fundamentally synchronous-worker; every task touching `httpx.AsyncClient` or the async SQLAlchemy session would need a sync/async bridge (`asyncio.run` inside a sync task, or `asgiref`-style adapters). arq is asyncio-native and needs none of that, for the same job.
+- **One shared worker pool/queue for every provider.** Rejected: defeats half the point. A slow or rate-limited provider (Kie, or Fish Audio hitting its real 5-concurrency ceiling) would consume worker capacity a fast TTS job also needs — exactly the failure mode this ADR exists to prevent.
+
+## Consequences
+
+**Positive:**
+- Request handlers return in milliseconds regardless of provider latency; the DB-connection-pool math that made ~15 concurrent submissions a real ceiling no longer applies to the request path.
+- Fish Audio's real concurrency limit (and any other provider's, once observed) is enforced structurally by queue concurrency, not hoped around.
+- A backend process restart/deploy no longer silently drops in-flight jobs — arq/Redis persist queue state; a worker restart resumes from the queue.
+- Transient provider failures self-heal via automatic retry instead of requiring the user to notice and resubmit.
+- Kie's inherently slow, genuinely-async nature is structurally prevented from ever blocking a fast synchronous-provider job, by construction (separate queues, submit/track split).
+- Natural fit for the planned Docker deployment: worker(s) are just another container, scalable independently of the web tier.
+
+**Negative / open items:**
+- **New infrastructure dependency (Redis)** — another thing to provision and keep available; a Redis outage stalls all new submissions (mitigated by the enqueue-failure path above releasing the hold immediately rather than leaving a job silently stuck, but generation is unavailable until Redis is back). Exact hosting (self-managed container vs. a managed Redis) isn't decided — being arranged separately.
+- **User-visible latency changes shape**: even a 2-second Azure call now costs at least one request (submit) + one or more poll round-trips instead of a single request returning the finished result. Mitigated by fast providers finishing within a poll cycle or two, but it's a real, acknowledged trade against product-scope.md §0's speed priority — accepted because the alternative (resource exhaustion under realistic concurrent load) is strictly worse.
+- **Frontend must add real polling** — `frontend/web`'s `create/tts` and `create/clone` pages currently assume `POST /generate/tts`'s response is already terminal; they need a poll loop against the existing `GET /jobs/{id}` until a terminal status, which the API contract already supports (ADR 0002) but the UI code doesn't yet exercise. Tracked as a paired frontend task, not something this ADR alone finishes.
+- Per-provider concurrency numbers beyond Fish Audio's 4 (observed) are provisional guesses (Azure/Google) until a real limit is hit; likely becomes an `app_settings` value later ([ADR 0012](0012-app-settings-table.md)) rather than a code constant, same reasoning as `fish_tts_model`.
+- Retry count/backoff policy is a starting guess (one retry), not tuned against real failure-rate data yet.
+- Worker observability (structured logs, a dead-letter view for jobs that exhaust retries) isn't designed yet — today's `GET /admin/jobs` listing is the only visibility.
+
+## Related
+
+- Refines [ADR 0002](0002-unified-async-job-model.md) without reversing it: ADR 0002 defined the provider-level `submit`/`poll` contract; this ADR decides *where* that contract is invoked from (a background worker, never the request handler) — independent of whether a given provider is natively sync or async.
+- Resolves [ADR 0007](0007-scheduled-tasks-module.md)'s previously-open "scheduling mechanism is explicitly undecided" item — arq's cron feature is that mechanism.
+- Depends on nothing from [ADR 0009](0009-voice-cloning-reusable-asset.md)/[0010](0010-public-gallery-visibility-flag.md) changing — voice cloning and the public gallery both continue to work exactly as designed, just with their provider call happening in a worker instead of inline.
