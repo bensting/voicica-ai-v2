@@ -199,10 +199,13 @@ export function AudioRecorder({
   }
 
   return (
-    <div className="rounded-2xl border border-border-soft bg-surface p-3.5">
-      <button onClick={() => void startRecording()} className="flex w-full items-center gap-3 text-left">
-        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-a3/15 text-a3">
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
+    <div className="flex flex-col items-center rounded-2xl border border-border-soft bg-surface px-4 py-6 text-center">
+      <button
+        onClick={() => void startRecording()}
+        className="flex flex-col items-center gap-2.5 focus:outline-none"
+      >
+        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-a3/15 text-a3">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
             <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
             <path d="M19 10v2a7 7 0 01-14 0v-2" />
             <line x1="12" y1="19" x2="12" y2="23" />
@@ -210,12 +213,12 @@ export function AudioRecorder({
         </div>
         <div>
           <div className="text-[13.5px] font-medium">Start recording</div>
-          <div className="text-[11.5px] text-text-2">Up to {MAX_SECONDS} seconds</div>
+          <div className="mt-0.5 text-[11.5px] text-text-2">Up to {MAX_SECONDS} seconds</div>
         </div>
       </button>
       <button
         onClick={() => fileInputRef.current?.click()}
-        className="mt-2.5 w-full text-center text-[12px] font-medium text-a3"
+        className="mt-4 text-[12px] font-medium text-a3 focus:outline-none"
       >
         or choose an audio file
       </button>
