@@ -31,6 +31,16 @@ Verified against https://docs.fish.audio/api-reference/introduction
   The resulting model's `_id` is then usable immediately as `reference_id`
   in an ordinary `/v1/tts` call (verified: trained a real test model, spoke
   with it right away, deleted it — see `backend/README.md`).
+- **No language parameter, on either call** — unlike Azure/Google, whose
+  APIs need an explicit locale (a voice *is* a locale there). Verified
+  against Fish Audio's own docs (2026-09-12): `POST /model` runs ASR on the
+  sample audio to figure out what's said (and so what language it's in) if
+  `texts` isn't given, rather than taking a language field; `POST /v1/tts`
+  has no language field either — `s2.1-pro` is multilingual and infers the
+  text's language itself, with the cloned voice's own accent/character
+  carried over from training regardless of what language it's asked to
+  speak. Nothing missing here to add — this is Fish Audio's actual design,
+  not a gap in this adapter.
 """
 
 from typing import Any
