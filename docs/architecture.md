@@ -224,8 +224,10 @@ backend/
 │   │   └── sweep_stuck_jobs.py    # resolves timed-out jobs to failed, releases their hold
 │   ├── worker/                # arq task definitions + WorkerSettings, one process per queue (ADR 0014)
 │   │   ├── tasks.py             # one task per provider: opens its own DB session, calls providers/, settles/releases credits
-│   │   ├── kie_submit.py         # the short "call Kie's createTask, store provider_job_id" task (queue:kie-submit)
-│   │   └── cron.py               # arq cron jobs: Kie completion sweep, stuck-job sweep (ADR 0007), catalog sync (ADR 0007)
+│   │   ├── settings.py           # WorkerSettings per provider queue (FishAudioWorker/AzureWorker/GoogleWorker) — implemented
+│   │   ├── cron.py               # arq cron jobs — implemented: stuck-job sweep (ADR 0007); planned: Kie completion sweep, catalog sync
+│   │   ├── run_all.py            # local-dev convenience: all of the above in one process instead of four (implemented)
+│   │   └── kie_submit.py         # planned: the short "call Kie's createTask, store provider_job_id" task (queue:kie-submit) — not built, no Kie provider yet
 │   ├── api/                  # FastAPI routes — input validation, calls services/
 │   ├── models/                # Jobs, credit ledger, asset, and catalog tables (see below)
 │   └── core/
