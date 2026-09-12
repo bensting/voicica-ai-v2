@@ -21,6 +21,23 @@ from app.core.queue import QUEUE_NAMES, redis_settings
 from app.services.jobs import MAX_PROVIDER_TRIES
 from app.worker.tasks import run_tts_job, run_voice_model_training_job
 
+# arq's own per-attempt ceiling (asyncio.wait_for around the whole task) —
+# a real question surfaced this was silently using arq's unstated default
+# (also 300, as it happens) rather than a value anyone had actually chosen.
+# Sized against this codebase's own now-explicit numbers, not guessed: the
+# provider HTTP call itself is capped at 60s (providers/*.py), R2 upload at
+# up to ~180s worst case (2 attempts × (30s connect + 60s read),
+# services/assets.py) — 300s covers that with real margin rather than
+# cutting off a slow-but-succeeding upload. If this ever actually fires,
+# arq auto-retries the task (up to MAX_PROVIDER_TRIES) same as a caught
+# TransientProviderError — but unlike that path, arq's retry doesn't touch
+# this app's own Job row/credit hold, so a run that exhausts all retries
+# this way leaves the job `processing` with its hold still active until
+# the stuck-job sweep (worker/cron.py, ADR 0007) resolves it — the real
+# backstop for exactly this edge case, not something arq's timeout itself
+# guarantees.
+_JOB_TIMEOUT_SECONDS = 300
+
 _tts_function = func(run_tts_job, name="run_tts_job", max_tries=MAX_PROVIDER_TRIES)
 _training_function = func(
     run_voice_model_training_job, name="run_voice_model_training_job", max_tries=MAX_PROVIDER_TRIES
@@ -38,6 +55,7 @@ class FishAudioWorker:
     queue_name = QUEUE_NAMES["fish_audio"]
     redis_settings = redis_settings()
     max_jobs = 4
+    job_timeout = _JOB_TIMEOUT_SECONDS
 
 
 class AzureWorker:
@@ -49,6 +67,7 @@ class AzureWorker:
     queue_name = QUEUE_NAMES["azure"]
     redis_settings = redis_settings()
     max_jobs = 20
+    job_timeout = _JOB_TIMEOUT_SECONDS
 
 
 class GoogleWorker:
@@ -58,3 +77,4 @@ class GoogleWorker:
     queue_name = QUEUE_NAMES["google"]
     redis_settings = redis_settings()
     max_jobs = 20
+    job_timeout = _JOB_TIMEOUT_SECONDS

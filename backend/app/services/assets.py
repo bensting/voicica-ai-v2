@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import boto3
+from botocore.config import Config
 from starlette.concurrency import run_in_threadpool
 
 from app.core.config import get_settings
@@ -20,6 +21,14 @@ from app.core.config import get_settings
 # candidate future app_settings value (ADR 0012) once more than one capability
 # mirrors assets — not worth a settings row for a single hardcoded number yet.
 _DEFAULT_RETENTION_DAYS = 90
+
+# Explicit rather than relying on botocore's own default (also 60/60, as it
+# happens — verified, not assumed) — every other outbound call in this
+# codebase (providers/*.py's httpx clients) states its timeout in the code
+# rather than leaning on a library default nobody's read, and this is the
+# one place that wasn't yet consistent with that (found while answering a
+# question about worker timeout handling end to end — ADR 0014).
+_R2_CLIENT_CONFIG = Config(connect_timeout=30, read_timeout=60, retries={"max_attempts": 2})
 
 
 def _r2_client():
@@ -35,6 +44,7 @@ def _r2_client():
         aws_access_key_id=settings.r2_access_key_id,
         aws_secret_access_key=settings.r2_secret_access_key,
         region_name="auto",
+        config=_R2_CLIENT_CONFIG,
     )
 
 
