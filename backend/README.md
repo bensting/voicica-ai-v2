@@ -57,6 +57,8 @@ arq app.worker.settings.GoogleWorker       # Google-voiced TTS
 arq app.worker.cron.CronWorker             # stuck-job sweep (ADR 0007) — runs on a timer, no queue traffic of its own
 ```
 
+Or in PyCharm: **"Worker - Fish Audio"**/**"Worker - Azure"**/**"Worker - Google"**/**"Worker - Cron (stuck-job sweep)"** (`.run/Worker-*.run.xml`, checked in same as `Backend`) — same run-configuration dropdown, same interpreter setup. None of these start automatically alongside `Backend`/`uvicorn` — they're separate processes on purpose (ADR 0014: independent restarts, independent scaling later), so pick and run each one you need.
+
 A job just sits `pending` forever (until the stuck-job sweep eventually fails it) if the worker for its provider isn't running — if a generation seems to hang, check that the relevant `arq` process is actually up before suspecting the code.
 
 ## What's implemented (this slice)
