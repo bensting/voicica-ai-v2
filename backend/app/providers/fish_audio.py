@@ -4,6 +4,17 @@ Verified against https://docs.fish.audio/api-reference/introduction
 (see architecture.md §3e):
 - `POST /v1/tts` is synchronous — it streams audio directly in the response.
   `submit()` therefore always returns an already-terminal `JobRef`.
+- **TTS model**: pinned to `s2.1-pro` via the `model` header on `/v1/tts` —
+  verified against https://docs.fish.audio/developer-guide/models-pricing
+  (2026-09-12): it's Fish Audio's current recommended production model
+  ("an improved version of S2-Pro" — better quality/latency/throughput),
+  and happens to already be the server-side default when this header is
+  omitted, but pinned explicitly rather than relying on an undocumented
+  default that could change later without this adapter noticing. There is
+  no "v2" model — Fish's naming is generational (`s1`, `s2-pro`,
+  `s2.1-pro`, `s2.1-pro-free`, `drama-3-preview`), not version-numbered.
+  Note: `speech-1.5`/`speech-1.6` (what the prior project's adapter used)
+  were deprecated 2026-02-28 — not carried forward here.
 - Voice cloning (`POST /model`) trains a reusable voice. architecture.md's
   original note assumed this needed polling (Kie-style, `state`
   created/training/trained/failed) — **corrected after testing the real
@@ -21,6 +32,9 @@ from typing import Any
 import httpx
 
 from app.providers.base import JobRef, Provider
+
+# See this module's docstring for how this was verified/why it's pinned.
+_TTS_MODEL = "s2.1-pro"
 
 
 class FishAudioProvider(Provider):
@@ -69,7 +83,7 @@ class FishAudioProvider(Provider):
             async with httpx.AsyncClient(timeout=60) as client:
                 response = await client.post(
                     f"{self._base_url}/v1/tts",
-                    headers={"Authorization": f"Bearer {self._api_key}"},
+                    headers={"Authorization": f"Bearer {self._api_key}", "model": _TTS_MODEL},
                     json=payload,
                 )
                 response.raise_for_status()
