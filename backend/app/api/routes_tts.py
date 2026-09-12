@@ -42,5 +42,14 @@ async def create_tts_job(
         ) from exc
     except ValueError as exc:
         raise APIError(status_code=400, code="invalid_voice", message=str(exc)) from exc
+    except jobs.EnqueueError as exc:
+        # ADR 0014: Redis unreachable at enqueue time — the job's already
+        # committed as failed and its hold released by submit_tts() itself;
+        # this is just picking the right status code for that outcome.
+        raise APIError(
+            status_code=503,
+            code="queue_unavailable",
+            message="Couldn't queue this job right now — please try again.",
+        ) from exc
 
     return JobResponse.model_validate(job)

@@ -99,10 +99,13 @@ function GenerateTab({
     setSubmitting(true);
     setError(null);
     try {
-      const result = await api.submitTts(text.trim(), { voiceModelId: selectedId }, {
+      const submitted = await api.submitTts(text.trim(), { voiceModelId: selectedId }, {
         ...audioSettings,
         visibility: shareToExplore ? "public" : "private",
       });
+      // ADR 0014: poll instead of assuming submitTts()'s own response is
+      // already terminal — see create/tts/page.tsx's identical comment.
+      const result = await api.pollJob(submitted.id);
       setJob(result);
       if (result.status === "failed") setError(result.error ?? "Generation failed.");
     } catch (err) {
@@ -284,7 +287,10 @@ function CloneTab({
     setError(null);
     setSuccess(false);
     try {
-      const job = await api.trainVoiceModel(name.trim(), audio.blob, audio.fileName, referenceText.trim() || undefined);
+      const submitted = await api.trainVoiceModel(name.trim(), audio.blob, audio.fileName, referenceText.trim() || undefined);
+      // ADR 0014: training runs in a background worker too now — poll
+      // instead of assuming the submit response is already terminal.
+      const job = await api.pollJob(submitted.id);
       if (job.status === "failed") {
         setError(job.error ?? "Cloning failed.");
       } else {

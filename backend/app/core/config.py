@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     # against texttospeech.googleapis.com.
     google_tts_api_key: str | None = None
 
+    # Redis (ADR 0014) — the arq task queue behind background job execution.
+    # A local, unauthenticated default so a fresh checkout at least imports
+    # cleanly; real generation needs a real reachable Redis (see .env.example).
+    redis_url: str = "redis://localhost:6379/0"
+
     # Asset storage (ADR 0004) — Cloudflare R2, S3-compatible.
     r2_account_id: str | None = None
     r2_access_key_id: str | None = None

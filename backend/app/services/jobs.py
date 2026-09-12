@@ -1,8 +1,23 @@
 """Orchestrates job submission and owns the hold -> settle/release lifecycle
-(ADR 0002 + ADR 0003). This slice implements `tts` end-to-end; every other
-capability's submit flow follows the same shape.
+(ADR 0002 + ADR 0003).
+
+**Since ADR 0014**, "submit" and "execute" are two different functions,
+called from two different places:
+- `submit_tts()`/`submit_voice_model_training()` (called from `api/`) only
+  create the `Job` row, hold credits, and enqueue a task — they never call
+  a provider themselves anymore, so a request handler calling these returns
+  in milliseconds regardless of how long the vendor takes.
+- `execute_tts_job()`/`execute_voice_model_training_job()` (called from
+  `worker/tasks.py`, one arq task per job, with a DB session the worker
+  opened itself — never the request's) do what used to happen inline: call
+  the provider, settle or release credits, write the terminal state.
+
+This split is the whole point of ADR 0014 — see its "Context" for the two
+concrete problems (DB-connection-pool exhaustion; Fish Audio's real
+5-concurrent-request limit) that made the old inline shape not scale.
 """
 
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -11,12 +26,23 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core import queue as queue_service
 from app.models.models import Asset, CreditHold, Job, VoiceModel
 from app.providers.base import JobRef
 from app.providers.registry import get_provider_by_name
 from app.services import app_settings, credits
 from app.services import assets as assets_service
 from app.services import voice_catalog as voice_catalog_service
+
+
+class EnqueueError(Exception):
+    """Raised by a `submit_*` function when the job's row + credit hold were
+    committed but handing the job to the queue failed (Redis unreachable) —
+    ADR 0014's "enqueue failure is a first-class error path", not an edge
+    case: by the time this is raised, the hold has already been released
+    and the job already marked `failed`, so the caller (an `api/` route)
+    just needs to turn this into a `503`-shaped response rather than the
+    `202` it would otherwise send for a job that will now never run."""
 
 
 async def submit_tts(
@@ -31,62 +57,44 @@ async def submit_tts(
     pitch: int = 50,
     visibility: str = "private",
 ) -> Job:
-    """Submit a TTS job. Raises credits.InsufficientCreditsError before
-    anything reaches a provider if the user can't afford the estimated cost;
-    raises ValueError if voice_id/voice_model_id doesn't resolve to a real,
-    owned voice.
+    """Create a pending TTS job, hold credits, and enqueue it (ADR 0014) —
+    does not call a provider; see `execute_tts_job` for that. Raises
+    credits.InsufficientCreditsError before anything is queued if the user
+    can't afford the estimated cost; raises ValueError if voice_id/voice_model_id
+    doesn't resolve to a real, owned voice; raises EnqueueError if the job
+    couldn't be handed to the queue (credits already released in that case).
 
-    Which provider gets called is decided by the voice, not the capability —
-    exactly one of two kinds of voice is given (schemas.TTSRequest enforces
-    this with a model_validator, so this function trusts it's already true):
-    - `voice_id`: a `voice_catalog` row, which carries its own provider +
-      provider_voice_id + locale (docs/data-model.md) — picking a voice IS
-      picking a provider.
+    Which provider a job routes to is decided by the voice, not the
+    capability — exactly one of two kinds of voice is given (schemas.TTSRequest
+    enforces this with a model_validator, so this function trusts it's
+    already true):
+    - `voice_id`: a `voice_catalog` row, which carries its own provider
+      (docs/data-model.md) — picking a voice IS picking a provider.
     - `voice_model_id`: a `voice_models` row (ADR 0009) — a voice the caller
       has cloned themselves. Currently always `provider="fish_audio"` (the
       only provider this slice's cloning is built against); the row must
       belong to `user_id` and be `state="ready"`, or this raises ValueError.
     Neither is optional at the HTTP layer — Fish Audio isn't a general "no
-    voice selected" fallback (an earlier version of this defaulted to its
-    own generic voice, which had nothing to do with what the picker actually
-    offers), so there is no product-sensible default to fall back to.
+    voice selected" fallback, so there is no product-sensible default.
 
-    speed/volume/pitch use one provider-agnostic scale (schemas.TTSRequest:
-    speed 0.5-2.0x, volume/pitch 1-100 centered on 50) passed through to
-    every adapter as-is; each converts to its own units — ranges and exact
-    formulas ported from the prior project's verified-in-production
-    conversions (`ai-voice-labs-web`'s azure-tts.ts/google-tts.ts/queue/tts
-    route.ts), not re-derived from scratch:
-      - Azure (SSML <prosody>): rate% = (speed-1)*100, pitch% = pitch-50,
-        volume = volume as-is (0-100). Always wraps the voice in <prosody> —
-        the defaults (0%, 0%, 50) are themselves a no-op.
-      - Google (audioConfig): speakingRate = speed clamped to Google's wider
-        0.25-4.0; pitch = (pitch-50)*0.4 (their -20..20 semitone range);
-        volumeGainDb = (volume-50)*0.2 (their -96..16 dB range, kept modest).
-        Some newer voices (Chirp3 HD) reject `pitch` outright — the adapter
-        retries once without it on that specific 400, same as the prior
-        project's fallback.
-      - Fish Audio: only supports speed + volume, no pitch (silently
-        ignored, matching the prior project's own comment on why). Included
-        in the request only when they differ from default, in Fish's own
-        prosody shape: speed as-is, volume as (volume-50)/50 (their ~-1..1
-        relative scale)."""
+    Only `provider` is resolved here (which queue the job goes to); the
+    full voice resolution (`provider_voice_id`/`locale`) and the
+    speed/volume/pitch-to-provider-units conversion happen in
+    `execute_tts_job`, once a worker actually picks the job up — re-reading
+    `voice_catalog`/`voice_models` there rather than threading resolved
+    values through the queue payload keeps that payload to just a job id."""
     estimated_cost = await credits.estimate_tts_cost(db, text)
 
-    locale: str | None = None
     if voice_model_id is not None:
         owned_voice = await db.get(VoiceModel, voice_model_id)
         if owned_voice is None or owned_voice.user_id != user_id or owned_voice.state != "ready":
             raise ValueError(f"Unknown or not-ready voice_model_id={voice_model_id!r}")
         provider_name = owned_voice.provider
-        provider_voice_id = owned_voice.provider_model_id
     else:
         voice = await voice_catalog_service.get_voice(db, voice_id)
         if voice is None:
             raise ValueError(f"Unknown voice_id={voice_id!r}")
         provider_name = voice.provider
-        provider_voice_id = voice.provider_voice_id
-        locale = voice.locale
 
     job = Job(
         user_id=user_id,
@@ -113,45 +121,9 @@ async def submit_tts(
 
     credit_hold = await credits.hold(db, user_id=user_id, job_id=job.id, amount=estimated_cost)
     job.hold_id = credit_hold.id
-
-    provider = get_provider_by_name(provider_name)
-    provider_inputs: dict[str, Any] = {
-        "text": text,
-        "speed": speed,
-        "volume": volume,
-        "pitch": pitch,
-        "provider_voice_id": provider_voice_id,
-        "locale": locale,
-    }
-    if provider_name == "fish_audio":
-        # Which Fish Audio TTS model to use is an app_settings value (ADR
-        # 0012), not a hardcoded constant in providers/fish_audio.py — read
-        # fresh per-request (no caching), same as tts_credits_per_10_chars,
-        # so bumping it to whatever Fish recommends next is a
-        # PATCH /admin/settings/fish_tts_model, not a deploy. Only fetched
-        # for this provider — Azure/Google have no equivalent concept, no
-        # reason to pay the extra lookup on their requests.
-        provider_inputs["model"] = await app_settings.get_setting(db, "fish_tts_model")
-    job_ref: JobRef = await provider.submit("tts", provider_inputs)
-
-    if job_ref.status == "succeeded":
-        await _complete_success(db, job=job, credit_hold=credit_hold, job_ref=job_ref)
-    elif job_ref.status == "failed":
-        await _complete_failure(db, job=job, credit_hold=credit_hold, error=job_ref.error)
-    else:
-        # None of the TTS-capable providers (Azure/Google/Fish Audio) ever
-        # return pending/processing — this branch exists only because the
-        # interface (ADR 0002) is shared with genuinely async providers
-        # (Kie, later).
-        job.status = job_ref.status
-        job.provider_state = job_ref.provider_state
-
-    # Commit explicitly here rather than relying solely on get_db()'s
-    # post-yield commit: a client that immediately polls GET /jobs/{id} right
-    # after this response must see the committed row, not a race against
-    # request-teardown timing. (get_db()'s own commit becomes a harmless
-    # no-op on top of this.)
     await db.commit()
+
+    await _enqueue_or_fail(db, job=job, credit_hold=credit_hold, function="run_tts_job")
     return job
 
 
@@ -164,27 +136,26 @@ async def submit_voice_model_training(
     audio_filename: str,
     reference_text: str | None = None,
 ) -> Job:
-    """Submit a voice-cloning job (ADR 0009) — an ordinary job like `tts`,
-    just with `capability="voice_model_training"` and a `voice_models` row
-    as its success output instead of an `assets` row. Fish Audio only for
-    now (the only provider this product has a verified cloning integration
-    against — ADR 0009's own open item on Azure/Google is still open).
+    """Create a pending voice-cloning job (ADR 0009), hold (0) credits, and
+    enqueue it (ADR 0014) — same split as `submit_tts`, see `execute_voice_model_training_job`
+    for the part that actually calls Fish Audio.
 
-    **Free** (`estimated_cost=0`): the prior project never charged for
-    training a clone either (only for *using* one to generate speech, at
-    the ordinary per-character TTS rate) — this ports that verified,
-    already-shipped pricing rather than inventing a number, and resolves
-    ADR 0009's "exact credit cost of training" open item. Still goes
-    through the normal hold->settle/release lifecycle at that $0 amount
-    rather than skipping it, so training jobs get the same audit trail
-    (credit_transactions rows) and no-charge-on-failure guarantee as
+    Fish Audio only for now (the only provider this product has a verified
+    cloning integration against — ADR 0009's own open item on Azure/Google
+    is still open). **Free** (`estimated_cost=0`): the prior project never
+    charged for training a clone either (only for *using* one to generate
+    speech, at the ordinary per-character TTS rate) — this ports that
+    verified, already-shipped pricing rather than inventing a number, and
+    resolves ADR 0009's "exact credit cost of training" open item. Still
+    goes through the normal hold->settle/release lifecycle at that $0
+    amount rather than skipping it, so training jobs get the same audit
+    trail (credit_transactions rows) and no-charge-on-failure guarantee as
     every other capability, for free (pun intended).
 
-    Fish Audio's `train_mode="fast"` (the only mode this adapter uses,
-    `providers/fish_audio.py`) is synchronous — verified against the real
-    API: the model is already `state: "trained"` in the same response that
-    creates it, no polling needed. So this looks exactly like `submit_tts`'s
-    shape: submit, get back an already-terminal `JobRef`, done."""
+    The audio bytes are passed through the queue payload as-is (unlike
+    `submit_tts`, there's no DB row to re-derive them from later) — arq's
+    default (pickle) serializer handles `bytes` fine; this is a short
+    recording (`routes_voice_models.py` caps it at 15MB), not a concern."""
     estimated_cost = 0
 
     job = Job(
@@ -200,6 +171,188 @@ async def submit_voice_model_training(
 
     credit_hold = await credits.hold(db, user_id=user_id, job_id=job.id, amount=estimated_cost)
     job.hold_id = credit_hold.id
+    await db.commit()
+
+    await _enqueue_or_fail(
+        db,
+        job=job,
+        credit_hold=credit_hold,
+        function="run_voice_model_training_job",
+        audio_bytes=audio_bytes,
+        audio_filename=audio_filename,
+    )
+    return job
+
+
+async def _enqueue_or_fail(
+    db: AsyncSession, *, job: Job, credit_hold: CreditHold, function: str, **kwargs: Any
+) -> None:
+    """Shared by both `submit_*` functions — ADR 0014's "enqueue failure is
+    a first-class error path": if Redis is unreachable, release the hold
+    and mark the job failed immediately rather than leaving it `pending`
+    with credits locked and nothing that will ever pick it up."""
+    queue_name = queue_service.QUEUE_NAMES[job.provider]
+    try:
+        await queue_service.enqueue(function, job_id=str(job.id), queue_name=queue_name, **kwargs)
+    except Exception as exc:
+        await credits.release(db, credit_hold)
+        job.status = "failed"
+        job.error = f"Could not queue this job: {exc}"
+        job.completed_at = datetime.now(UTC)
+        await db.commit()
+        raise EnqueueError(str(exc)) from exc
+
+
+class TransientProviderError(Exception):
+    """Raised by `execute_*_job` instead of writing a final `failed` state,
+    when a provider call failed in a way that looks transient (a network
+    timeout, connection error, or 5xx — see `_is_transient_error`) and
+    retries remain. `worker/tasks.py` catches this and turns it into arq's
+    own `Retry`, which is the only place this codebase depends on arq's
+    retry mechanism directly — this module stays queue-agnostic."""
+
+
+def _is_transient_error(error: str | None) -> bool:
+    """Every provider adapter's `JobRef.error` follows one of two shapes
+    (verified by inspection, all three adapters use the same wording):
+    `"{Provider} request failed: {exc}"` for a network-level failure with
+    no HTTP response at all (timeout, connection refused) — always
+    transient; or `"{Provider} {status_code}: {body}"` for a real HTTP
+    error response — transient only if it's a 5xx (server-side), never a
+    4xx (a definitive rejection: bad input, unsupported voice, etc. — retrying
+    would just fail the same way again while wasting a vendor call)."""
+    if not error:
+        return False
+    if "request failed:" in error:
+        return True
+    match = re.search(r"\b(\d{3}):", error)
+    return bool(match) and match.group(1).startswith("5")
+
+
+# How many total attempts (first try + retries) a transient provider failure
+# gets before it's written as a final `failed` — matched by the `max_tries`
+# arq's Function wrapper is given for these tasks (`worker/tasks.py`).
+MAX_PROVIDER_TRIES = 3
+
+
+async def execute_tts_job(
+    db: AsyncSession, job_id: uuid.UUID, *, job_try: int = 1
+) -> Job | None:
+    """The part of TTS submission that used to run inline before ADR 0014:
+    resolve the voice again from the job's own stored `input`, call the
+    provider, settle or release credits, write the terminal state. Called
+    by an arq worker task (`worker/tasks.py`) with its own DB session.
+
+    Returns `None` if the job or its hold has vanished by the time a worker
+    picks it up — shouldn't happen in practice (nothing deletes a pending
+    job), but a missing row is a no-op here, not a crash.
+
+    Raises `TransientProviderError` (instead of writing a final `failed`
+    state) when the provider call looks like a transient failure and
+    `job_try` hasn't reached `MAX_PROVIDER_TRIES` yet — see
+    `_is_transient_error`'s docstring for what counts. The job is left in
+    `processing` in that case, credits still held, for the worker's retry
+    to pick back up."""
+    job = await db.get(Job, job_id)
+    if job is None:
+        return None
+    credit_hold = await db.get(CreditHold, job.hold_id) if job.hold_id else None
+    if credit_hold is None:
+        return None
+
+    job.status = "processing"
+    await db.commit()
+
+    text = job.input["text"]
+    speed = job.input.get("speed", 1.0)
+    volume = job.input.get("volume", 50)
+    pitch = job.input.get("pitch", 50)
+    voice_id_str = job.input.get("voice_id")
+    voice_model_id_str = job.input.get("voice_model_id")
+
+    locale: str | None = None
+    if voice_model_id_str:
+        owned_voice = await db.get(VoiceModel, uuid.UUID(voice_model_id_str))
+        if owned_voice is None or owned_voice.user_id != job.user_id or owned_voice.state != "ready":
+            await _complete_failure(
+                db, job=job, credit_hold=credit_hold, error="Voice is no longer available."
+            )
+            await db.commit()
+            return job
+        provider_voice_id = owned_voice.provider_model_id
+    else:
+        voice = await voice_catalog_service.get_voice(db, uuid.UUID(voice_id_str))
+        if voice is None:
+            await _complete_failure(
+                db, job=job, credit_hold=credit_hold, error="Voice is no longer available."
+            )
+            await db.commit()
+            return job
+        provider_voice_id = voice.provider_voice_id
+        locale = voice.locale
+
+    provider = get_provider_by_name(job.provider)
+    provider_inputs: dict[str, Any] = {
+        "text": text,
+        "speed": speed,
+        "volume": volume,
+        "pitch": pitch,
+        "provider_voice_id": provider_voice_id,
+        "locale": locale,
+    }
+    if job.provider == "fish_audio":
+        # See providers/fish_audio.py's docstring — read fresh per attempt
+        # (no caching), same as tts_credits_per_10_chars (ADR 0012).
+        provider_inputs["model"] = await app_settings.get_setting(db, "fish_tts_model")
+
+    job_ref: JobRef = await provider.submit("tts", provider_inputs)
+
+    if job_ref.status == "succeeded":
+        await _complete_success(db, job=job, credit_hold=credit_hold, job_ref=job_ref)
+    elif job_ref.status == "failed":
+        if job_try < MAX_PROVIDER_TRIES and _is_transient_error(job_ref.error):
+            await db.commit()  # job stays "processing", hold stays active
+            raise TransientProviderError(job_ref.error)
+        await _complete_failure(db, job=job, credit_hold=credit_hold, error=job_ref.error)
+    else:
+        # None of the TTS-capable providers (Azure/Google/Fish Audio) ever
+        # return pending/processing — this branch exists only because the
+        # interface (ADR 0002) is shared with genuinely async providers
+        # (Kie, later).
+        job.status = job_ref.status
+        job.provider_state = job_ref.provider_state
+
+    await db.commit()
+    return job
+
+
+async def execute_voice_model_training_job(
+    db: AsyncSession,
+    job_id: uuid.UUID,
+    *,
+    audio_bytes: bytes,
+    audio_filename: str,
+    job_try: int = 1,
+) -> Job | None:
+    """The part of voice-cloning submission that used to run inline before
+    ADR 0014 — same shape as `execute_tts_job`, for `voice_model_training`.
+
+    Fish Audio's `train_mode="fast"` (the only mode this adapter uses,
+    `providers/fish_audio.py`) is synchronous — verified against the real
+    API: the model is already `state: "trained"` in the same response that
+    creates it, no separate polling step needed here."""
+    job = await db.get(Job, job_id)
+    if job is None:
+        return None
+    credit_hold = await db.get(CreditHold, job.hold_id) if job.hold_id else None
+    if credit_hold is None:
+        return None
+
+    job.status = "processing"
+    await db.commit()
+
+    title = job.input["title"]
+    reference_text = job.input.get("reference_text")
 
     provider = get_provider_by_name("fish_audio")
     job_ref: JobRef = await provider.submit(
@@ -218,7 +371,7 @@ async def submit_voice_model_training(
         await credits.settle(db, credit_hold, actual_cost)
 
         voice_model = VoiceModel(
-            user_id=user_id,
+            user_id=job.user_id,
             title=title,
             provider="fish_audio",
             provider_model_id=output["provider_model_id"],
@@ -234,6 +387,9 @@ async def submit_voice_model_training(
         job.voice_model_id = voice_model.id
         job.output = {"voice_model_id": str(voice_model.id)}
     elif job_ref.status == "failed":
+        if job_try < MAX_PROVIDER_TRIES and _is_transient_error(job_ref.error):
+            await db.commit()
+            raise TransientProviderError(job_ref.error)
         await _complete_failure(db, job=job, credit_hold=credit_hold, error=job_ref.error)
     else:
         # Fast-mode training is synchronous (verified) — this branch exists
@@ -241,7 +397,6 @@ async def submit_voice_model_training(
         job.status = job_ref.status
         job.provider_state = job_ref.provider_state
 
-    # See submit_tts's comment above on why this commit is explicit.
     await db.commit()
     return job
 
@@ -294,11 +449,9 @@ async def _complete_failure(
 
 
 async def get_job(db: AsyncSession, job_id: uuid.UUID, *, user_id: str) -> Job | None:
-    """Read a job's current state. For this slice every job is already
-    terminal by the time it's written (Azure/Google are both synchronous) —
-    there's nothing to poll yet. An async provider's poll would call
-    `provider.poll()` here and advance the row before returning it; not
-    needed until Kie."""
+    """Read a job's current state. Since ADR 0014, `pending`/`processing`
+    are real states a client can observe while polling — the provider call
+    happens in a worker, not inline in the submitting request anymore."""
     job = await db.get(Job, job_id)
     if job is None or job.user_id != user_id:
         return None

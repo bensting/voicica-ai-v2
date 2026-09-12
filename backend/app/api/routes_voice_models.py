@@ -37,14 +37,23 @@ async def create_voice_model(
     if len(audio_bytes) > _MAX_SAMPLE_BYTES:
         raise APIError(status_code=422, code="invalid_input", message="Audio sample is too large.")
 
-    job = await jobs.submit_voice_model_training(
-        db,
-        user_id=user.id,
-        title=title,
-        audio_bytes=audio_bytes,
-        audio_filename=audio.filename or "sample.mp3",
-        reference_text=reference_text,
-    )
+    try:
+        job = await jobs.submit_voice_model_training(
+            db,
+            user_id=user.id,
+            title=title,
+            audio_bytes=audio_bytes,
+            audio_filename=audio.filename or "sample.mp3",
+            reference_text=reference_text,
+        )
+    except jobs.EnqueueError as exc:
+        # ADR 0014: Redis unreachable at enqueue time — see routes_tts.py's
+        # identical handling for why this is 503, not a 4xx.
+        raise APIError(
+            status_code=503,
+            code="queue_unavailable",
+            message="Couldn't queue this job right now — please try again.",
+        ) from exc
     return JobResponse.model_validate(job)
 
 

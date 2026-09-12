@@ -32,10 +32,15 @@ export default function CreateTtsPage() {
     setSubmitting(true);
     setError(null);
     try {
-      const result = await api.submitTts(text.trim(), { voiceId: voice.id }, {
+      const submitted = await api.submitTts(text.trim(), { voiceId: voice.id }, {
         ...audioSettings,
         visibility: shareToExplore ? "public" : "private",
       });
+      // ADR 0014: the provider call happens in a background worker now, so
+      // `submitted` is always still `pending` here — poll GET /jobs/{id}
+      // (this app's real providers finish in a few seconds, so this feels
+      // close to instant) rather than assuming the first response is final.
+      const result = await api.pollJob(submitted.id);
       setJob(result);
       if (result.status === "failed") {
         setError(result.error ?? "Generation failed.");

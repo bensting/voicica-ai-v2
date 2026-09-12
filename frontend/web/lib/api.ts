@@ -256,6 +256,31 @@ export const api = {
 
   getJob: (id: string) => request<JobResponse>(`/jobs/${id}`),
 
+  /** Poll `GET /jobs/{id}` until it reaches a terminal status — genuinely
+   * necessary now (ADR 0014): the provider call happens in a background
+   * worker, so `submitTts()`/`trainVoiceModel()`'s own response is always
+   * `pending`, never already-finished the way it used to be. Every real
+   * provider call this app makes today finishes in a few seconds, so a
+   * short fixed interval (no exponential backoff) keeps this feeling
+   * close to instant without hammering the API. Throws `ApiError` (code
+   * "job_timeout") if nothing terminal shows up within `timeoutMs` — the
+   * job itself keeps running server-side either way; this is just giving
+   * up on waiting for it in this tab. */
+  pollJob: async (
+    id: string,
+    { intervalMs = 800, timeoutMs = 60_000 }: { intervalMs?: number; timeoutMs?: number } = {},
+  ): Promise<JobResponse> => {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const job = await request<JobResponse>(`/jobs/${id}`);
+      if (job.status === "succeeded" || job.status === "failed") return job;
+      if (Date.now() >= deadline) {
+        throw new ApiError(408, "job_timeout", "This is taking longer than expected.");
+      }
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  },
+
   setVisibility: (id: string, visibility: "public" | "private") =>
     request<JobResponse>(`/jobs/${id}?visibility=${visibility}`, {
       method: "PATCH",
