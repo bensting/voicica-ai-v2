@@ -17,6 +17,7 @@ from app.providers.azure import AzureProvider
 from app.providers.base import Provider
 from app.providers.fish_audio import FishAudioProvider
 from app.providers.google import GoogleProvider
+from app.providers.kie import KieProvider
 
 # capability -> ordered list of provider names to try (first only, for now)
 _CAPABILITY_PROVIDERS: dict[str, list[str]] = {
@@ -38,6 +39,12 @@ def _build_providers() -> dict[str, Provider]:
         )
     if settings.google_tts_api_key:
         providers["google"] = GoogleProvider(api_key=settings.google_tts_api_key)
+    if settings.kie_api_key:
+        providers["kie"] = KieProvider(
+            api_key=settings.kie_api_key,
+            base_url=settings.kie_base_url,
+            callback_base_url=settings.public_base_url,
+        )
     return providers
 
 

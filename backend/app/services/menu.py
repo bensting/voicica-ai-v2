@@ -79,17 +79,23 @@ _DEFAULT_ITEMS: list[dict[str, Any]] = [
         },
     },
     {
-        "id": "image",
+        # Renamed from "AI Image"/id "image" (ADR 0015's first real Kie
+        # category) once a second, genuinely different image capability —
+        # image-to-image — was about to be added: "AI Image" would have
+        # been ambiguous between the two, so the id and label are both
+        # specific to this one now. route points at the generic Kie
+        # category page (app/create/kie/[categoryId]), not a dedicated one.
+        "id": "text-to-image",
         "icon": "image",
-        "route": "/app/create/image",
-        "enabled": False,
+        "route": "/app/create/kie/text-to-image",
+        "enabled": True,
         "order": 4,
         "badge": None,
         "labels": {
-            "en": "AI Image",
-            "th": "สร้างภาพ AI",
-            "id": "Gambar AI",
-            "es": "Imagen IA",
+            "en": "Text to Image",
+            "th": "แปลงข้อความเป็นภาพ",
+            "id": "Teks ke Gambar",
+            "es": "Texto a Imagen",
         },
         "descriptions": {
             "en": "Generate images from text prompts",
@@ -99,11 +105,58 @@ _DEFAULT_ITEMS: list[dict[str, Any]] = [
         },
     },
     {
+        # A second, genuinely different Kie category (ADR 0016) from
+        # "text-to-image" above — same generic pages (app/create/kie/
+        # [categoryId]/[modelId]), just a different categoryId, per ADR
+        # 0015's whole point: a new category is a menu item + catalog rows,
+        # not new frontend code.
+        "id": "image-to-image",
+        "icon": "image",
+        "route": "/app/create/kie/image-to-image",
+        "enabled": True,
+        "order": 5,
+        "badge": None,
+        "labels": {
+            "en": "Image to Image",
+            "th": "แปลงภาพเป็นภาพ",
+            "id": "Gambar ke Gambar",
+            "es": "Imagen a Imagen",
+        },
+        "descriptions": {
+            "en": "Transform images using reference photos",
+            "th": "แปลงภาพโดยใช้ภาพอ้างอิง",
+            "id": "Ubah gambar menggunakan foto referensi",
+            "es": "Transforma imágenes usando fotos de referencia",
+        },
+    },
+    {
+        # A third Kie category (ADR 0017), the first with output_type
+        # "video" — same generic pages, a new result renderer only.
+        "id": "image-to-video",
+        "icon": "video",
+        "route": "/app/create/kie/image-to-video",
+        "enabled": True,
+        "order": 6,
+        "badge": None,
+        "labels": {
+            "en": "Image to Video",
+            "th": "แปลงภาพเป็นวิดีโอ",
+            "id": "Gambar ke Video",
+            "es": "Imagen a Video",
+        },
+        "descriptions": {
+            "en": "Animate a photo into a short video",
+            "th": "เปลี่ยนภาพถ่ายเป็นวิดีโอสั้น",
+            "id": "Ubah foto menjadi video pendek",
+            "es": "Convierte una foto en un video corto",
+        },
+    },
+    {
         "id": "bg-remove",
         "icon": "wand",
         "route": "/app/create/bg-remove",
         "enabled": False,
-        "order": 5,
+        "order": 7,
         "badge": None,
         "labels": {
             "en": "BG Remover & HD Upscaler",
@@ -123,7 +176,7 @@ _DEFAULT_ITEMS: list[dict[str, Any]] = [
         "icon": "download",
         "route": "/app/create/video-download",
         "enabled": False,
-        "order": 6,
+        "order": 8,
         "badge": "popular",
         "labels": {
             "en": "Video Downloader",

@@ -155,11 +155,13 @@ If a provider fails or is over quota, the fallback path is: `registry.py` catche
 Confirmed from Kie's docs — these live entirely inside `providers/kie.py`, never surfacing past `base.py`'s canonical interface:
 
 - **Polling**: `GET https://api.kie.ai/api/v1/jobs/recordInfo?taskId=...`, bearer-token auth. Returns `state` as one of `"waiting"`, `"queuing"`, `"generating"`, `"success"`, `"fail"` — `kie.py`'s `poll()` maps these to our canonical `JobStatus` (`waiting`/`queuing`/`generating` → `processing`; `success` → `succeeded`; `fail` → `failed`). The raw Kie state is worth keeping alongside the canonical one (e.g. a `provider_state` field on the job) so the UI can show "queued" vs. "generating" instead of one flat "processing" spinner — optional, doesn't affect the contract.
-- **Webhooks are supported**: passing `callBackUrl` at task creation is Kie's documented alternative to polling. **Decision: prefer the webhook, keep polling as the fallback/verification path** — `submit()` always registers a callback endpoint; `poll()` still works standalone (needed anyway for Azure/Google-style adapters and for recovering if a callback is ever missed).
-- **Kie reports its own cost per task** (`creditsConsumed`, returned once `state` is terminal). This resolves the open item in [ADR 0003](decisions/0003-credit-ledger-hold-then-settle.md) about whether `actual_cost` can diverge from `estimated_cost` for Kie: it can, and Kie tells us exactly how much it charged, so our own pricing rule can settle `actual_cost` from Kie's `creditsConsumed` (times our own exchange rate/margin) instead of re-deriving it from request parameters.
-- **Result URLs expire ~24 hours after completion** (`resultJson.resultUrls`). Per [ADR 0004](decisions/0004-asset-mirroring-r2-retention.md), a successful job's assets are mirrored into Cloudflare R2 before that window closes, with a configurable retention period rather than kept forever.
-- **Polling policy**: start at 2–3s intervals with backoff, give up after 10–15 minutes (treat as `failed`/timeout if no terminal state by then); a `429` means back off harder. This is `kie.py`'s internal retry policy, invisible to `services/`.
-- **Under [ADR 0014](decisions/0014-background-job-execution.md), "submit" and "track to completion" are two separate execution steps, not one worker task** — see §3f below. `kie.py`'s `submit()`/`poll()` methods themselves are unchanged by this; what changes is that nothing calls `poll()` in a tight loop from within one long-lived task anymore.
+- **Webhooks are supported**: passing `callBackUrl` at task creation is Kie's documented alternative to polling. **Decision: prefer the webhook, keep polling as the fallback/verification path** — `submit()` registers a callback endpoint only when this backend has a public URL configured (`PUBLIC_BASE_URL`, empty in local dev); `poll()` always works standalone regardless, which is what the poll-sweep cron (§3f) relies on.
+- **Kie reports its own cost per task** (`creditsConsumed`, returned once `state` is terminal). This resolves the open item in [ADR 0003](decisions/0003-credit-ledger-hold-then-settle.md) about whether `actual_cost` can diverge from `estimated_cost` for Kie: it can, and settlement uses `creditsConsumed` directly, 1:1 — [ADR 0015](decisions/0015-kie-model-catalog.md) explains why no exchange-rate/margin layer exists yet (the curated catalog's own pricing numbers are copied from Kie's real displayed prices, so the units already match).
+- **Result URLs expire ~24 hours after completion** (`resultJson` — a JSON *string*, confirmed by a real call, containing `resultUrls`). Per [ADR 0004](decisions/0004-asset-mirroring-r2-retention.md), a successful job's assets are mirrored into Cloudflare R2 before that window closes, with a configurable retention period rather than kept forever.
+- **Under [ADR 0014](decisions/0014-background-job-execution.md), "submit" and "track to completion" are two separate execution steps, not one worker task** — see §3f below. `kie.py`'s `submit()` always returns a `processing` `JobRef` (never waits); `poll()` is called later, by the webhook route or the cron sweep, never from within a long-lived worker task.
+- **The model catalog itself — which `model_id`s exist, their input schema, their pricing — is [ADR 0015](decisions/0015-kie-model-catalog.md)'s subject**, not this section: two real tables (`kie_categories`/`kie_models`), hand-curated, verified against two real model families (Flux-2, GPT Image 2.5). `providers/kie.py` itself has zero per-model code — `model` and `input` are opaque values it never inspects.
+- **A real gotcha, found by an actual failed call, not anticipated**: Kie returned **HTTP 500** for `flux-2/pro-text-to-image` when a required `resolution` field was missing from `input` — not a 400. `services/jobs.py`'s shared `_is_transient_error()` heuristic (5xx = transient, retry) treats this as retryable, so a genuinely wrong/incomplete `input_schema` costs a wasted ~15s of retries before failing for real, rather than failing immediately. No charge either way (ADR 0003), so this is a latency/wasted-call cost, not a correctness bug — the actual fix is keeping `kie_models.input_schema` complete (verified per real model, not guessed from Kie's simplified playground Form view, which doesn't always show every required field).
+- **Image-to-image needs a real public URL, not a file upload or base64** ([ADR 0016](decisions/0016-kie-image-to-image-uploads.md)) — confirmed against a real request body from both Flux-2 and GPT Image 2.5: the reference-image field (`input_urls` on every model checked) is an array Kie's own servers fetch themselves. This doesn't fit `services/assets.py`'s existing authenticated-proxy story (`GET /jobs/{id}/asset`) at all, since Kie can't attach this app's Firebase header — `POST /kie/uploads` hosts the reference at a short-lived public R2 URL instead, deleted the moment its job resolves.
 
 If we ever build against another async, catalog-style vendor, this section is the template for what "provider specifics" means in practice — vendor state enum, callback vs. polling, vendor-native cost reporting, asset lifetime all stay inside that vendor's own adapter.
 
@@ -212,35 +214,44 @@ backend/
 │   │   ├── base.py          # abstract interface: submit() -> JobRef, poll() -> JobStatus (ADR 0002)
 │   │   ├── azure.py
 │   │   ├── google.py
-│   │   ├── kie.py            # generic run(model_id, inputs); model catalog is config, not code
+│   │   ├── fish_audio.py     # TTS + voice cloning (ADR 0009)
+│   │   ├── kie.py            # generic submit(model_id, input)/poll() — zero per-model code (ADR 0015)
 │   │   └── registry.py      # selects a concrete provider from config/request params
 │   ├── services/
-│   │   ├── jobs.py            # orchestrates submit/poll, owns the hold→settle/release lifecycle (ADR 0003)
-│   │   ├── credits.py          # pricing-rule lookup + wallet operations (hold, settle, release)
+│   │   ├── jobs.py            # orchestrates submit/execute, owns the hold→settle/release lifecycle (ADR 0003/0014)
+│   │   ├── credits.py          # wallet operations (hold, settle, release, ADR 0003)
 │   │   ├── assets.py            # mirrors a succeeded job's output into R2, tracks retention (ADR 0004)
-│   │   └── catalog.py            # reads the synced voice/model catalog (written by scheduled/, read by api/)
-│   ├── scheduled/              # periodic, non-request-triggered work (ADR 0007) — calls services/ + providers/ like any request handler would
-│   │   ├── sync_catalog.py       # pulls each provider's voice/model list into our DB
-│   │   └── sweep_stuck_jobs.py    # resolves timed-out jobs to failed, releases their hold
-│   ├── worker/                # arq task definitions + WorkerSettings, one process per queue (ADR 0014)
-│   │   ├── tasks.py             # one task per provider: opens its own DB session, calls providers/, settles/releases credits
-│   │   ├── settings.py           # WorkerSettings per provider queue (FishAudioWorker/AzureWorker/GoogleWorker) — implemented
-│   │   ├── cron.py               # arq cron jobs — implemented: stuck-job sweep (ADR 0007); planned: Kie completion sweep, catalog sync
-│   │   ├── run_all.py            # local-dev convenience: all of the above in one process instead of four (implemented)
-│   │   └── kie_submit.py         # planned: the short "call Kie's createTask, store provider_job_id" task (queue:kie-submit) — not built, no Kie provider yet
+│   │   ├── voice_catalog.py      # reads the synced Azure/Google voice list (written by scheduled/sync_catalog.py)
+│   │   ├── voice_models.py        # a user's own cloned voices (ADR 0009)
+│   │   ├── kie_catalog.py          # the hand-curated Kie model catalog — categories, models, pricing rule (ADR 0015)
+│   │   ├── menu.py                 # the capability menu, stored in app_settings (ADR 0012)
+│   │   ├── app_settings.py          # simple tunable scalars (ADR 0012)
+│   │   ├── gallery.py                # the public gallery query (ADR 0010)
+│   │   └── users.py                   # first-login bootstrap (wallet + signup bonus)
+│   ├── scheduled/              # periodic, non-request-triggered work run by hand today (ADR 0007)
+│   │   └── sync_catalog.py       # pulls Azure/Google's real voice list into voice_catalog — `python -m app.scheduled.sync_catalog`
+│   ├── worker/                # arq task definitions + WorkerSettings, one process per queue (ADR 0014/0015)
+│   │   ├── tasks.py             # one task per provider/step: opens its own DB session, calls services/jobs.py's execute_*
+│   │   ├── settings.py           # WorkerSettings per queue (FishAudioWorker/AzureWorker/GoogleWorker/KieSubmitWorker)
+│   │   ├── cron.py               # arq cron jobs: stuck-job sweep (ADR 0007) + Kie poll-sweep (ADR 0015); catalog sync still run by hand
+│   │   └── run_all.py            # local-dev convenience: every worker above in one process instead of five
 │   ├── api/                  # FastAPI routes — input validation, calls services/
-│   ├── models/                # Jobs, credit ledger, asset, and catalog tables (see below)
+│   │   ├── routes_tts.py, routes_voice_models.py     # synchronous-provider capabilities
+│   │   ├── routes_kie.py                              # generic /generate/kie + /kie/categories, /kie/models (ADR 0015)
+│   │   ├── routes_webhooks.py                          # POST /webhooks/kie — Kie's callBackUrl target
+│   │   ├── routes_jobs.py, routes_gallery.py, routes_catalog.py, routes_config.py, routes_me.py, routes_admin.py
+│   │   └── schemas.py, errors.py
+│   ├── models/                # Jobs, credit ledger, asset, and catalog tables — one models.py (see data-model.md)
 │   └── core/
-│       ├── config.py         # provider keys, priority, fallback policy, Kie model catalog, pricing rules, R2 credentials + retention config
+│       ├── config.py         # provider keys/base URLs (secrets — ADR 0012 distinguishes this from app_settings)
 │       ├── queue.py           # arq Redis pool / enqueue helper (ADR 0014) — the one place services/ reaches to enqueue a task
+│       ├── db.py              # async session factory
 │       └── auth.py            # verify_identity(token) -> (user_id, role) — wraps Firebase Admin SDK (ADR 0008); routes call this, never Firebase directly
 ```
 
-*Scheduling mechanism resolved by [ADR 0014](decisions/0014-background-job-execution.md): arq's cron feature runs `worker/cron.py`'s jobs (Kie completion sweep, stuck-job sweep, and eventually catalog sync) on a timer, independent of the request-serving process.*
+*Scheduling mechanism resolved by [ADR 0014](decisions/0014-background-job-execution.md): arq's cron feature runs `worker/cron.py`'s jobs (stuck-job sweep, Kie poll-sweep) on a timer, independent of the request-serving process. `sync_catalog.py` hasn't moved to a cron job yet — still run by hand.*
 
 **Data model**: the full schema (tables, ER diagram, notes) lives in [`data-model.md`](data-model.md), built on Postgres ([ADR 0006](decisions/0006-database-orm-choice.md)) — not duplicated here to avoid the two drifting apart.
-
-This layout is not yet implemented — it is the target structure for the first backend milestone.
 
 ## 5. Open questions
 

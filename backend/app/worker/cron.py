@@ -15,7 +15,8 @@ from sqlalchemy import select
 from app.core.db import async_session_factory
 from app.core.queue import redis_settings
 from app.models.models import CreditHold, Job
-from app.services import credits
+from app.providers.registry import get_provider_by_name
+from app.services import credits, jobs
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,8 @@ async def sweep_stuck_jobs(ctx: dict[str, Any]) -> int:
             job.status = "failed"
             job.error = "Timed out waiting for the provider (stuck-job sweep)."
             job.completed_at = datetime.now(UTC)
+            if job.provider == "kie":
+                await jobs.cleanup_kie_uploads(job)  # ADR 0016
             swept += 1
         if swept:
             await db.commit()
@@ -57,12 +60,49 @@ async def sweep_stuck_jobs(ctx: dict[str, Any]) -> int:
     return swept
 
 
+async def sweep_kie_processing_jobs(ctx: dict[str, Any]) -> int:
+    """ADR 0015's poll-based fallback for Kie completion — the webhook
+    (`POST /webhooks/kie`) is the primary path; this catches anything it
+    missed (callback never arrived, or arrived before this backend had a
+    public URL configured) by batch-polling Kie's `recordInfo` for every
+    Kie job still `processing`. Runs every minute — frequent enough that a
+    missed webhook rarely costs a user more than ~1 minute of extra wait,
+    but still a batched pass, never a per-job wait (`sweep_stuck_jobs`
+    above, at 15 minutes, remains the final backstop if even this sweep's
+    own poll calls fail outright, e.g. a Kie outage)."""
+    resolved = 0
+    async with async_session_factory() as db:
+        stuck_jobs = (
+            await db.execute(
+                select(Job).where(
+                    Job.provider == "kie",
+                    Job.status == "processing",
+                    Job.provider_job_id.is_not(None),
+                )
+            )
+        ).scalars().all()
+        if not stuck_jobs:
+            return 0
+        provider = get_provider_by_name("kie")
+        for job in stuck_jobs:
+            job_status = await provider.poll(job.provider_job_id)
+            if job_status.status in ("succeeded", "failed"):
+                resolved += 1
+            await jobs.finalize_kie_job(db, job.id, job_status)
+    if resolved:
+        logger.info("Kie poll-sweep resolved %d job(s)", resolved)
+    return resolved
+
+
 class CronWorker:
     """No `functions` of its own to consume from a provider queue — this
     process exists only to tick cron jobs on a timer, run as:
     `arq app.worker.cron.CronWorker`."""
 
     functions: ClassVar[list] = []
-    cron_jobs: ClassVar[list] = [cron(sweep_stuck_jobs, minute=set(range(0, 60, 5)))]  # every 5 min
+    cron_jobs: ClassVar[list] = [
+        cron(sweep_stuck_jobs, minute=set(range(0, 60, 5))),  # every 5 min
+        cron(sweep_kie_processing_jobs, minute=set(range(60))),  # every 1 min
+    ]
     queue_name = "queue:cron"
     redis_settings = redis_settings()

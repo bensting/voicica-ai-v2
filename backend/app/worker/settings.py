@@ -19,7 +19,7 @@ from arq.worker import func
 
 from app.core.queue import QUEUE_NAMES, redis_settings
 from app.services.jobs import MAX_PROVIDER_TRIES
-from app.worker.tasks import run_tts_job, run_voice_model_training_job
+from app.worker.tasks import run_kie_submit_job, run_tts_job, run_voice_model_training_job
 
 # arq's own per-attempt ceiling (asyncio.wait_for around the whole task) —
 # a real question surfaced this was silently using arq's unstated default
@@ -41,6 +41,9 @@ _JOB_TIMEOUT_SECONDS = 300
 _tts_function = func(run_tts_job, name="run_tts_job", max_tries=MAX_PROVIDER_TRIES)
 _training_function = func(
     run_voice_model_training_job, name="run_voice_model_training_job", max_tries=MAX_PROVIDER_TRIES
+)
+_kie_submit_function = func(
+    run_kie_submit_job, name="run_kie_submit_job", max_tries=MAX_PROVIDER_TRIES
 )
 
 
@@ -77,4 +80,19 @@ class GoogleWorker:
     queue_name = QUEUE_NAMES["google"]
     redis_settings = redis_settings()
     max_jobs = 20
+    job_timeout = _JOB_TIMEOUT_SECONDS
+
+
+class KieSubmitWorker:
+    """Deliberately its own queue/process (ADR 0014/0015): this task only
+    ever calls Kie's createTask and returns — it never waits for Kie to
+    finish generating, so its `max_jobs` isn't about Kie's generation
+    capacity, only about how many createTask calls can be in flight at
+    once. No real limit observed yet (Kie doesn't document one for this
+    endpoint) — provisional, same caveat as Azure/Google's numbers."""
+
+    functions: ClassVar[list] = [_kie_submit_function]
+    queue_name = QUEUE_NAMES["kie"]
+    redis_settings = redis_settings()
+    max_jobs = 10
     job_timeout = _JOB_TIMEOUT_SECONDS

@@ -1,6 +1,6 @@
-"""Convenience entrypoint: runs every worker (ADR 0014's three provider
+"""Convenience entrypoint: runs every worker (ADR 0014/0015's provider
 queues + the cron sweep, `worker/settings.py`/`worker/cron.py`) in one OS
-process — one thing to start for local dev instead of four.
+process — one thing to start for local dev instead of five.
 
 **This doesn't change the design** — it's still 4 independent `arq.Worker`
 instances under the hood, each enforcing its own `max_jobs` against its own
@@ -25,11 +25,11 @@ from arq.logs import default_log_config
 from arq.worker import Worker, create_worker
 
 from app.worker.cron import CronWorker
-from app.worker.settings import AzureWorker, FishAudioWorker, GoogleWorker
+from app.worker.settings import AzureWorker, FishAudioWorker, GoogleWorker, KieSubmitWorker
 
 logger = logging.getLogger(__name__)
 
-_ALL_WORKER_SETTINGS = [FishAudioWorker, AzureWorker, GoogleWorker, CronWorker]
+_ALL_WORKER_SETTINGS = [FishAudioWorker, AzureWorker, GoogleWorker, KieSubmitWorker, CronWorker]
 
 
 async def _run() -> None:

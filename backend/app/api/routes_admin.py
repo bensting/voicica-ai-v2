@@ -13,6 +13,9 @@ from app.api.errors import APIError
 from app.api.schemas import (
     CreditGrantRequest,
     JobResponse,
+    KieCategoryAdmin,
+    KieModelAdmin,
+    KieModelPatch,
     MenuItemAdmin,
     MenuItemPatch,
     MeResponse,
@@ -22,6 +25,7 @@ from app.core.auth import CurrentUser, require_admin
 from app.core.db import get_db
 from app.models.models import Job, User
 from app.services import app_settings, credits
+from app.services import kie_catalog as kie_catalog_service
 from app.services import menu as menu_service
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -142,6 +146,67 @@ async def delete_menu_item(
 ) -> None:
     try:
         await menu_service.delete_item(db, item_id, updated_by=admin.id)
+    except KeyError as exc:
+        raise APIError(status_code=404, code="not_found", message=str(exc)) from exc
+    await db.commit()
+
+
+# ---- Kie catalog (ADR 0015) — adding a model is meant to be exactly this:
+# a POST here, no deploy, nothing else in the codebase touched. ----
+
+
+@router.post("/kie-categories", response_model=KieCategoryAdmin, status_code=201)
+async def create_kie_category(
+    body: KieCategoryAdmin,
+    _admin: CurrentUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> KieCategoryAdmin:
+    try:
+        row = await kie_catalog_service.create_category(db, body.model_dump())
+    except ValueError as exc:
+        raise APIError(status_code=422, code="invalid_input", message=str(exc)) from exc
+    await db.commit()
+    return row
+
+
+@router.post("/kie-models", response_model=KieModelAdmin, status_code=201)
+async def create_kie_model(
+    body: KieModelAdmin,
+    _admin: CurrentUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> KieModelAdmin:
+    try:
+        row = await kie_catalog_service.create_model(db, body.model_dump())
+    except ValueError as exc:
+        raise APIError(status_code=422, code="invalid_input", message=str(exc)) from exc
+    await db.commit()
+    return row
+
+
+@router.patch("/kie-models/{model_id}", response_model=KieModelAdmin)
+async def update_kie_model(
+    model_id: str,
+    body: KieModelPatch,
+    _admin: CurrentUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> KieModelAdmin:
+    patch = body.model_dump(exclude_unset=True)
+    try:
+        row = await kie_catalog_service.update_model(db, model_id, patch)
+    except KeyError as exc:
+        raise APIError(status_code=404, code="not_found", message=str(exc)) from exc
+    await db.commit()
+    return row
+
+
+@router.delete("/kie-models/{model_id}", status_code=204)
+async def delete_kie_model(
+    model_id: str,
+    _admin: CurrentUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    try:
+        await kie_catalog_service.delete_model(db, model_id)
     except KeyError as exc:
         raise APIError(status_code=404, code="not_found", message=str(exc)) from exc
     await db.commit()

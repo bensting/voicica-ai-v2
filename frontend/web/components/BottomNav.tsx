@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
+import { APP_CONTENT_WIDTH } from "@/lib/layout";
 import { CreateSheet } from "./CreateSheet";
 
 export function BottomNav() {
@@ -17,7 +18,7 @@ export function BottomNav() {
         className="fixed bottom-0 left-0 right-0 z-40 bg-bg/85 backdrop-blur-xl border-t border-border-soft"
         style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
       >
-        <div className="mx-auto flex h-16 max-w-md items-center">
+        <div className={`mx-auto flex h-16 items-center ${APP_CONTENT_WIDTH}`}>
           <Link
             href="/app"
             className="flex flex-1 h-full flex-col items-center justify-center gap-0.5"

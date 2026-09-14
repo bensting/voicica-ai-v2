@@ -18,14 +18,15 @@ from app.core.config import get_settings
 # Provider -> the queue its jobs are enqueued into. Fish Audio, Azure, and
 # Google each get their own queue (and therefore their own worker
 # concurrency ceiling) so one provider being slow/rate-limited never delays
-# another's jobs, which a single shared queue would allow. Kie (not yet
-# implemented) will add "kie_submit" here once its adapter exists — see
-# ADR 0014 and architecture.md §3f for why Kie's queue only ever holds the
-# short "create the task at Kie" step, never a wait for Kie to finish.
+# another's jobs, which a single shared queue would allow. "kie" (ADR 0015)
+# only ever holds the short "create the task at Kie" step (worker/tasks.py's
+# run_kie_submit_job) — see ADR 0014 and architecture.md §3f for why that's
+# never a wait for Kie to finish generating.
 QUEUE_NAMES: dict[str, str] = {
     "fish_audio": "queue:fish_audio",
     "azure": "queue:azure",
     "google": "queue:google",
+    "kie": "queue:kie-submit",
 }
 
 

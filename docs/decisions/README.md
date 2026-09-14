@@ -51,3 +51,6 @@ What this makes easier, what it makes harder, what it locks in.
 | [0012](0012-app-settings-table.md) | Simple tunable values live in `app_settings`, not config files | Accepted |
 | [0013](0013-i18n-routing-strategy.md) | i18n routing — locale-prefixed URLs for marketing, cookie for the app | Accepted |
 | [0014](0014-background-job-execution.md) | Background job execution via Redis + arq, queues split per provider | Accepted |
+| [0015](0015-kie-model-catalog.md) | Kie model catalog — hand-curated DB tables, generic wire protocol | Accepted |
+| [0016](0016-kie-image-to-image-uploads.md) | Kie image-to-image — short-lived public R2 uploads for reference images | Accepted |
+| [0017](0017-kie-video-and-catalog-splitting.md) | Kie video category, per-unit pricing, and catalog rows outnumbering real Kie models | Accepted |

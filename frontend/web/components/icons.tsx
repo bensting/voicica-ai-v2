@@ -41,6 +41,12 @@ const icons: Record<string, (props: SVGProps<SVGSVGElement>) => React.ReactEleme
       <path d="M3 21l9-9" strokeLinecap="round" />
     </svg>
   ),
+  video: (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...props}>
+      <rect x="2" y="5" width="14" height="14" rx="2.5" />
+      <path d="M16 9.5l5-3v11l-5-3z" />
+    </svg>
+  ),
   download: (props) => (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" {...props}>
       <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />

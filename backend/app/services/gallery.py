@@ -5,32 +5,50 @@ the whole implementation.
 
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import Asset, Job
+from app.models.models import Asset, Job, KieCategory
 
 _DEFAULT_LIMIT = 20
 _MAX_LIMIT = 50
 
 
 async def list_public(
-    db: AsyncSession, *, cursor: str | None = None, limit: int = _DEFAULT_LIMIT
+    db: AsyncSession,
+    *,
+    cursor: str | None = None,
+    limit: int = _DEFAULT_LIMIT,
+    output_type: str | None = None,
 ) -> tuple[list[Job], str | None]:
     """Newest-first, cursor-paginated. Cursor is the previous page's last
     item's `created_at` (ISO 8601) — simple rather than opaque, since
     nothing here is sensitive; two jobs sharing a microsecond-precision
     timestamp is the one known edge case (a row could be skipped), accepted
-    for now rather than adding a compound (created_at, id) cursor."""
+    for now rather than adding a compound (created_at, id) cursor.
+
+    `output_type` (audio/image/video) filters Explore into tabs — reuses
+    `kie_categories.output_type`, the same field `KieModelResponse` already
+    denormalizes for the generation page's result renderer (ADR 0017),
+    rather than a second hardcoded classification. TTS jobs aren't a Kie
+    category (`Job.capability == "tts"`, not a `kie_categories.id`), so the
+    `LEFT JOIN` falls back to `"audio"` for those explicitly — everything
+    else's output_type comes from its category row, no other capability
+    needs a special case today."""
     limit = max(1, min(limit, _MAX_LIMIT))
+
+    output_type_expr = case((Job.capability == "tts", "audio"), else_=KieCategory.output_type)
 
     query = (
         select(Job)
         .join(Asset, Asset.job_id == Job.id)
+        .outerjoin(KieCategory, KieCategory.id == Job.capability)
         .where(Job.visibility == "public", Asset.mirror_status == "done")
         .order_by(Job.created_at.desc())
         .limit(limit + 1)  # one extra row tells us whether there's a next page
     )
+    if output_type:
+        query = query.where(output_type_expr == output_type)
     if cursor:
         query = query.where(Job.created_at < datetime.fromisoformat(cursor))
 

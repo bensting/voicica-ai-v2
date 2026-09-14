@@ -16,9 +16,12 @@ router = APIRouter(tags=["gallery"])
 async def list_gallery(
     cursor: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=50),
+    output_type: str | None = Query(default=None, pattern="^(audio|image|video)$"),
     db: AsyncSession = Depends(get_db),
 ) -> GalleryPage:
-    jobs, next_cursor = await gallery.list_public(db, cursor=cursor, limit=limit)
+    jobs, next_cursor = await gallery.list_public(
+        db, cursor=cursor, limit=limit, output_type=output_type
+    )
     return GalleryPage(
         items=[GalleryItemResponse.model_validate(j) for j in jobs], next_cursor=next_cursor
     )

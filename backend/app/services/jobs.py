@@ -17,22 +17,27 @@ concrete problems (DB-connection-pool exhaustion; Fish Audio's real
 5-concurrent-request limit) that made the old inline shape not scale.
 """
 
+import logging
 import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core import queue as queue_service
 from app.models.models import Asset, CreditHold, Job, VoiceModel
-from app.providers.base import JobRef
+from app.providers.base import JobRef, JobStatus
 from app.providers.registry import get_provider_by_name
 from app.services import app_settings, credits
 from app.services import assets as assets_service
+from app.services import kie_catalog as kie_catalog_service
 from app.services import voice_catalog as voice_catalog_service
+
+logger = logging.getLogger(__name__)
 
 
 class EnqueueError(Exception):
@@ -184,6 +189,93 @@ async def submit_voice_model_training(
     return job
 
 
+async def submit_kie_job(
+    db: AsyncSession,
+    *,
+    user_id: str,
+    model_id: str,
+    inputs: dict[str, Any],
+    uploaded_r2_keys: list[str] | None = None,
+    visibility: str = "private",
+) -> Job:
+    """Create a pending Kie job, hold credits, and enqueue the *submit-only*
+    task (ADR 0014/0015) — `queue:kie-submit`, not one of the per-provider
+    queues above, since this task only ever calls Kie's createTask and
+    returns; it never waits for Kie to actually finish (that's the whole
+    point of splitting "submit" from "track to completion" — see
+    `execute_kie_submit_job`/`finalize_kie_job` and architecture.md §3f).
+
+    Category-agnostic by construction: `capability` is set from the model's
+    own `category_id` (e.g. "text-to-image"), not a fixed enum member —
+    a new Kie category needs no change here, only a new `kie_categories`/
+    `kie_models` row (ADR 0015).
+
+    `uploaded_r2_keys` (ADR 0016): an image-to-image job's `inputs` already
+    contains real, live URLs (from `POST /kie/uploads`, called by the
+    frontend before this) — these are the matching R2 keys, tracked here
+    only so `cleanup_kie_uploads` can delete them once this job reaches a
+    terminal state (or fails to even enqueue, below). Empty for a
+    text-to-image job.
+
+    `provider_model_id`/`fixed_inputs` (ADR 0017): `model_id` is our own
+    catalog's id, not always what's literally sent to Kie (Veo 3.1's three
+    quality tiers are all really `provider_model_id="veo-3-1"`) — resolved
+    once here and stored alongside the merged `inputs` so
+    `execute_kie_submit_job` never needs to touch the catalog again, same
+    as the rest of this function's fields."""
+    kie_model = await kie_catalog_service.get_model(db, model_id)
+    if kie_model is None or not kie_model.enabled:
+        raise ValueError(f"Unknown or disabled Kie model_id={model_id!r}")
+    estimated_cost = kie_catalog_service.estimate_cost(kie_model, inputs)
+    merged_inputs = {**inputs, **kie_model.fixed_inputs}
+
+    job = Job(
+        user_id=user_id,
+        capability=kie_model.category_id,
+        provider="kie",
+        model_id=model_id,
+        status="pending",
+        input={
+            "model_id": model_id,
+            "provider_model_id": kie_model.provider_model_id,
+            "inputs": merged_inputs,
+            "uploaded_r2_keys": uploaded_r2_keys or [],
+        },
+        estimated_cost=estimated_cost,
+        visibility=visibility if visibility == "public" else "private",
+    )
+    db.add(job)
+    await db.flush()  # assigns job.id
+
+    credit_hold = await credits.hold(db, user_id=user_id, job_id=job.id, amount=estimated_cost)
+    job.hold_id = credit_hold.id
+    await db.commit()
+
+    try:
+        await _enqueue_or_fail(db, job=job, credit_hold=credit_hold, function="run_kie_submit_job")
+    except EnqueueError:
+        await cleanup_kie_uploads(job)
+        raise
+    return job
+
+
+async def cleanup_kie_uploads(job: Job) -> None:
+    """Deletes a Kie image-to-image job's short-lived public reference-image
+    upload(s) (ADR 0016) — called at every point a Kie job reaches a
+    terminal outcome (including failing to even enqueue), success or
+    failure alike. Best-effort: a cleanup failure is logged, never raised —
+    it must not affect the job's own outcome, same posture as Fish Audio's
+    best-effort voice-model delete (`services/voice_models.py`)."""
+    r2_keys = job.input.get("uploaded_r2_keys") if isinstance(job.input, dict) else None
+    if not r2_keys:
+        return
+    for r2_key in r2_keys:
+        try:
+            await assets_service.delete_object(r2_key)
+        except Exception:
+            logger.warning("Failed to clean up Kie upload %s", r2_key, exc_info=True)
+
+
 async def _enqueue_or_fail(
     db: AsyncSession, *, job: Job, credit_hold: CreditHold, function: str, **kwargs: Any
 ) -> None:
@@ -252,10 +344,22 @@ async def execute_tts_job(
     `job_try` hasn't reached `MAX_PROVIDER_TRIES` yet — see
     `_is_transient_error`'s docstring for what counts. The job is left in
     `processing` in that case, credits still held, for the worker's retry
-    to pick back up."""
+    to pick back up.
+
+    A real, live-caught case for the terminal-status check below: arq's
+    delivery guarantee is *at-least-once*, not exactly-once — a worker that
+    crashes (e.g. the documented Redis-connection-drop crash, `backend/
+    README.md`) after this function's own work already committed
+    successfully, but before arq itself finishes acknowledging the task,
+    redelivers the *same already-succeeded* job on restart. Without this
+    guard that meant calling the vendor a second time for real — observed
+    for a Kie job, not hypothetical."""
     job = await db.get(Job, job_id)
     if job is None:
         return None
+    if job.status in ("succeeded", "failed"):
+        logger.warning("execute_tts_job: job %s already %s, skipping redelivery", job_id, job.status)
+        return job
     credit_hold = await db.get(CreditHold, job.hold_id) if job.hold_id else None
     if credit_hold is None:
         return None
@@ -340,10 +444,21 @@ async def execute_voice_model_training_job(
     Fish Audio's `train_mode="fast"` (the only mode this adapter uses,
     `providers/fish_audio.py`) is synchronous — verified against the real
     API: the model is already `state: "trained"` in the same response that
-    creates it, no separate polling step needed here."""
+    creates it, no separate polling step needed here.
+
+    Terminal-status guard: see `execute_tts_job`'s docstring — arq can
+    redeliver an already-succeeded job if a worker crashes between this
+    function's own commit and arq's own delivery acknowledgment; without
+    this, a redelivery would train a second real Fish Audio model."""
     job = await db.get(Job, job_id)
     if job is None:
         return None
+    if job.status in ("succeeded", "failed"):
+        logger.warning(
+            "execute_voice_model_training_job: job %s already %s, skipping redelivery",
+            job_id, job.status,
+        )
+        return job
     credit_hold = await db.get(CreditHold, job.hold_id) if job.hold_id else None
     if credit_hold is None:
         return None
@@ -399,6 +514,181 @@ async def execute_voice_model_training_job(
 
     await db.commit()
     return job
+
+
+async def execute_kie_submit_job(
+    db: AsyncSession, job_id: uuid.UUID, *, job_try: int = 1
+) -> Job | None:
+    """ADR 0014/0015's `queue:kie-submit` task: call Kie's createTask
+    *only*, store `provider_job_id`, leave the job `processing` — it never
+    waits for Kie to actually finish. Completion is a separate concern
+    entirely (the webhook or the poll-sweep cron both call
+    `finalize_kie_job`, never this function again).
+
+    Terminal-status guard doesn't fit here the way it does in the other
+    `execute_*` functions — this one's own *normal* outcome is `processing`,
+    not terminal. The real redelivery signal is `provider_job_id` already
+    being set: that's this function's one real side effect (an actual
+    `createTask` call), so once it exists there is nothing left for a
+    redelivered attempt to safely do. Live-caught, not hypothetical: a
+    worker crash between this function's commit and arq's own delivery
+    acknowledgment (the same documented Redis-connection-drop crash,
+    `backend/README.md`) redelivered an already-submitted job, which
+    without this guard created a second real Kie video generation and
+    clobbered the first one's `provider_job_id` in the DB — the first
+    job's own result was still safe (already mirrored to R2 by the time
+    this happened), but a job re-delivered *before* finishing would have
+    lost track of its real, in-flight Kie task entirely."""
+    job = await db.get(Job, job_id)
+    if job is None:
+        return None
+    if job.provider_job_id is not None:
+        logger.warning(
+            "execute_kie_submit_job: job %s already has provider_job_id=%s, skipping redelivery",
+            job_id, job.provider_job_id,
+        )
+        return job
+    credit_hold = await db.get(CreditHold, job.hold_id) if job.hold_id else None
+    if credit_hold is None:
+        return None
+
+    job.status = "processing"
+    await db.commit()
+
+    # ADR 0017: `provider_model_id` (what Kie itself calls it) can differ
+    # from `model_id` (our own catalog id) — always the former for the
+    # actual call. `inputs` already has any `fixed_inputs` merged in
+    # (submit_kie_job, above), so this needs no catalog lookup here.
+    provider_model_id = job.input["provider_model_id"]
+    inputs = job.input["inputs"]
+
+    provider = get_provider_by_name("kie")
+    job_ref: JobRef = await provider.submit(
+        job.capability, {"model_id": provider_model_id, "input": inputs}
+    )
+
+    if job_ref.status == "failed":
+        if job_try < MAX_PROVIDER_TRIES and _is_transient_error(job_ref.error):
+            await db.commit()  # job stays "processing", hold stays active
+            raise TransientProviderError(job_ref.error)
+        await _complete_failure(db, job=job, credit_hold=credit_hold, error=job_ref.error)
+        await cleanup_kie_uploads(job)  # ADR 0016 — terminal, no retry left
+    else:
+        # Always true in practice — providers/kie.py's submit() never
+        # returns "succeeded" — but written generically rather than assuming,
+        # in case a future Kie-style vendor's create-task call can itself be
+        # instantly terminal for some inputs.
+        job.provider_job_id = job_ref.provider_job_id
+        job.provider_state = job_ref.provider_state
+        if job_ref.status == "succeeded":
+            await _complete_kie_success(
+                db, job=job, credit_hold=credit_hold, job_status=_as_job_status(job_ref)
+            )
+            await cleanup_kie_uploads(job)  # ADR 0016
+
+    await db.commit()
+    return job
+
+
+def _as_job_status(job_ref: JobRef) -> JobStatus:
+    return JobStatus(
+        status=job_ref.status, provider_state=job_ref.provider_state, output=job_ref.output
+    )
+
+
+async def finalize_kie_job(db: AsyncSession, job_id: uuid.UUID, job_status: JobStatus) -> Job | None:
+    """The one place a Kie job's `JobStatus` (from `providers/kie.py`'s
+    `poll()`) is applied to the DB — called two ways (ADR 0015): the webhook
+    (`POST /webhooks/kie`, primary path) and the poll-sweep cron
+    (`worker/cron.py`, fallback), both re-deriving the same `JobStatus` via
+    `poll()` rather than trusting a webhook body's own payload, so there's
+    exactly one code path for "what does a terminal Kie job look like."
+
+    `SELECT ... FOR UPDATE` on the hold row is what makes it safe for both
+    paths to race on the same job: the second to arrive blocks on the lock,
+    then sees the hold already resolved and no-ops, instead of double-
+    settling credits."""
+    job = await db.get(Job, job_id)
+    if job is None:
+        return None
+    if job.hold_id is None:
+        return job
+    credit_hold = (
+        await db.execute(select(CreditHold).where(CreditHold.id == job.hold_id).with_for_update())
+    ).scalar_one_or_none()
+    if credit_hold is None or credit_hold.status != "active":
+        return job  # already resolved by the other completion path
+
+    if job_status.status == "succeeded":
+        await _complete_kie_success(db, job=job, credit_hold=credit_hold, job_status=job_status)
+        await cleanup_kie_uploads(job)  # ADR 0016
+    elif job_status.status == "failed":
+        await _complete_failure(db, job=job, credit_hold=credit_hold, error=job_status.error)
+        await cleanup_kie_uploads(job)  # ADR 0016
+    else:
+        job.provider_state = job_status.provider_state
+
+    await db.commit()
+    return job
+
+
+# content-type -> file extension, for the handful of media types Kie's
+# image models return. Falls back to "bin" rather than guessing wrong.
+_EXTENSION_BY_CONTENT_TYPE: dict[str, str] = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/webp": "webp",
+    "video/mp4": "mp4",
+    "audio/mpeg": "mp3",
+}
+
+
+async def _download(url: str) -> tuple[bytes, str]:
+    """Kie's result URLs expire ~24h after completion (architecture.md
+    §3d) — downloaded here and handed to `assets_service.upload_bytes`
+    (already capability-agnostic: it just puts bytes at a job-namespaced R2
+    key) to mirror into R2 before that window closes."""
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.get(url)
+        response.raise_for_status()
+    return response.content, response.headers.get("content-type", "application/octet-stream")
+
+
+async def _complete_kie_success(
+    db: AsyncSession, *, job: Job, credit_hold: CreditHold, job_status: JobStatus
+) -> None:
+    """Settles from Kie's own `creditsConsumed`, 1:1 — not this catalog's
+    `estimate_cost()`, which only ever produces the up-front hold amount
+    (ADR 0015). Falls back to the estimate only if Kie ever omits it."""
+    output = job_status.output or {}
+    result_urls: list[str] = output.get("result_urls") or []
+    credits_consumed = output.get("credits_consumed")
+    actual_cost = int(credits_consumed) if credits_consumed is not None else job.estimated_cost
+    await credits.settle(db, credit_hold, actual_cost)
+
+    asset_fields: dict[str, Any] = {}
+    if result_urls:
+        media_bytes, content_type = await _download(result_urls[0])
+        extension = _EXTENSION_BY_CONTENT_TYPE.get(content_type, "bin")
+        asset_fields = await assets_service.upload_bytes(
+            job_id=job.id, data=media_bytes, content_type=content_type, extension=extension
+        )
+        db.add(
+            Asset(
+                job_id=job.id,
+                r2_key=asset_fields["r2_key"],
+                mirror_status=asset_fields["mirror_status"],
+                mirrored_at=asset_fields["mirrored_at"],
+                expires_at=asset_fields["expires_at"],
+            )
+        )
+
+    job.status = "succeeded"
+    job.actual_cost = actual_cost
+    job.completed_at = datetime.now(UTC)
+    job.provider_state = job_status.provider_state
+    asset_url = f"/jobs/{job.id}/asset" if asset_fields else None
+    job.output = {"asset_url": asset_url}
 
 
 async def _complete_success(

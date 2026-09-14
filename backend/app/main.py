@@ -12,9 +12,11 @@ from app.api import (
     routes_config,
     routes_gallery,
     routes_jobs,
+    routes_kie,
     routes_me,
     routes_tts,
     routes_voice_models,
+    routes_webhooks,
 )
 from app.api.errors import register_error_handlers
 from app.core import queue as queue_service
@@ -48,11 +50,13 @@ register_error_handlers(app)
 app.include_router(routes_me.router)
 app.include_router(routes_tts.router)
 app.include_router(routes_voice_models.router)
+app.include_router(routes_kie.router)
 app.include_router(routes_jobs.router)
 app.include_router(routes_gallery.router)
 app.include_router(routes_catalog.router)
 app.include_router(routes_config.router)
 app.include_router(routes_admin.router)
+app.include_router(routes_webhooks.router)
 
 
 @app.get("/health", tags=["meta"])

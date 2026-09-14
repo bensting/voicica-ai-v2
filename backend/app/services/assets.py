@@ -71,6 +71,55 @@ async def upload_bytes(
     }
 
 
+async def upload_public_bytes(
+    *, owner_id: str, data: bytes, content_type: str, extension: str
+) -> dict[str, str]:
+    """A Kie image-to-image reference upload (ADR 0016) — the one case in
+    this codebase where something needs a real, unauthenticated public URL:
+    Kie's own servers fetch a job's `input_urls` themselves, and obviously
+    can't attach this app's Firebase auth header the way `GET
+    /jobs/{id}/asset` requires. Distinct `uploads/` prefix (never `jobs/`,
+    which holds generated outputs) so retention/cleanup can differ per
+    prefix — the caller deletes this the moment its job reaches any
+    terminal state (`services/jobs.py cleanup_kie_uploads`), not kept for
+    ADR 0004's 90-day output-retention window.
+
+    Raises `RuntimeError` if `R2_PUBLIC_BASE_URL` isn't configured — a
+    silently-broken image-to-image feature (a URL Kie can never actually
+    reach) is worse than an explicit failure at the point this is first
+    needed."""
+    settings = get_settings()
+    if not settings.r2_public_base_url:
+        raise RuntimeError(
+            "R2_PUBLIC_BASE_URL is not configured — image-to-image needs a public "
+            "URL Kie's servers can fetch (see ADR 0016); a Cloudflare R2 bucket's "
+            "own public dev URL is enough, no custom domain required."
+        )
+    key = f"uploads/{owner_id}/{uuid.uuid4()}.{extension}"
+
+    def _put() -> None:
+        client = _r2_client()
+        client.put_object(Bucket=settings.r2_bucket, Key=key, Body=data, ContentType=content_type)
+
+    await run_in_threadpool(_put)
+    url = f"{settings.r2_public_base_url.rstrip('/')}/{key}"
+    return {"r2_key": key, "url": url}
+
+
+async def delete_object(r2_key: str) -> None:
+    """Best-effort cleanup for a short-lived public upload (ADR 0016) —
+    callers log and swallow failures here (same posture as Fish Audio's
+    best-effort voice-model delete, `services/voice_models.py`); a cleanup
+    failure shouldn't fail or retry the job it belongs to."""
+    settings = get_settings()
+
+    def _delete() -> None:
+        client = _r2_client()
+        client.delete_object(Bucket=settings.r2_bucket, Key=r2_key)
+
+    await run_in_threadpool(_delete)
+
+
 async def download_bytes(r2_key: str) -> tuple[bytes, str]:
     """Fetches an object's bytes + content-type from R2, for the backend to
     hand to a client itself (`GET /jobs/{id}/asset`) rather than a presigned

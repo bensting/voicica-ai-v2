@@ -12,11 +12,16 @@ import { MenuIcon } from "./icons";
 export function CreateSheet({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const [items, setItems] = useState<MenuItem[] | null>(null);
 
+  // Prefetched on mount, not on first open — `CreateSheet` lives inside
+  // `BottomNav`, which the `(app)` layout keeps mounted across page
+  // navigations, so this really does run once per app session: the menu
+  // is already sitting there the moment the user actually taps "+",
+  // instead of a loading spinner flashing on that first tap. No re-fetch
+  // on later opens either way (menu content doesn't change without a
+  // reload yet — no locale switcher UI exists to invalidate this).
   useEffect(() => {
-    if (isOpen && items === null) {
-      api.getMenu(getLocale()).then(setItems).catch(() => setItems([]));
-    }
-  }, [isOpen, items]);
+    api.getMenu(getLocale()).then(setItems).catch(() => setItems([]));
+  }, []);
 
   useEffect(() => {
     document.body.style.overflow = isOpen ? "hidden" : "";

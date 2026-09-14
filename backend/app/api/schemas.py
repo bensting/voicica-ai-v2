@@ -98,6 +98,118 @@ class VoiceModelResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class KieGenerateRequest(BaseModel):
+    """POST /generate/kie — category-agnostic (ADR 0015): `model_id` picks
+    both the category and the provider, the same way TTS's `voice_id` picks
+    a provider (services/jobs.py submit_kie_job). `inputs` is passed through
+    to Kie's own `input` object verbatim — its shape is whatever that
+    model's `kie_models.input_schema` (GET /kie/models) declares, validated
+    against the catalog's pricing rule at submission, not by this schema."""
+
+    model_id: str
+    inputs: dict[str, Any]
+    visibility: str = Field(default="private", pattern="^(private|public)$")
+    # ADR 0016: r2_key(s) from POST /kie/uploads that this job's `inputs`
+    # references (e.g. inside an `input_urls` field) — tracked so they can
+    # be deleted the moment this job reaches a terminal state, not kept for
+    # the generated-output retention window. Empty for a text-to-image job.
+    uploaded_r2_keys: list[str] = Field(default_factory=list)
+
+    # "model_id" collides with Pydantic v2's own reserved "model_" prefix
+    # (model_dump, model_validate, ...) — harmless here (this is a plain
+    # data field, not one of those), just silencing the warning.
+    model_config = {"protected_namespaces": ()}
+
+
+class KieCategoryResponse(BaseModel):
+    """GET /kie/categories — lets the frontend build one generic capability
+    page per category, driven by `output_type` (which result-renderer to
+    use) rather than a hardcoded per-category component."""
+
+    id: str
+    display_name: str
+    output_type: str
+
+    model_config = {"from_attributes": True}
+
+
+class KieModelResponse(BaseModel):
+    """GET /kie/models?category_id= — the schema-driven form (ADR 0015)
+    reads `input_schema` to render its fields; `pricing` is exposed too so
+    the frontend can show a live cost estimate as the user picks values,
+    the same way Kie's own playground shows a "N credits · Run" button.
+    `output_type` is denormalized from this model's category (ADR 0017) so
+    the generation page knows which result renderer to use without a
+    second fetch. `provider_model_id`/`fixed_inputs` (ADR 0017) are
+    deliberately not exposed here — purely a backend implementation detail
+    of how this catalog row maps onto Kie's real API, never the client's
+    business."""
+
+    model_id: str
+    category_id: str
+    display_name: str
+    output_type: str
+    input_schema: list[dict[str, Any]]
+    pricing: dict[str, Any]
+
+    model_config = {"from_attributes": True, "protected_namespaces": ()}
+
+
+class KieModelAdmin(BaseModel):
+    """POST/PATCH /admin/kie-models — every field, for editing.
+    `provider_model_id` defaults to `model_id` (every model catalogued
+    before ADR 0017 has them equal) — only pass a different value when one
+    real Kie model is being split into several catalog rows (Veo 3.1's
+    quality tiers); `fixed_inputs` pins whatever field distinguishes such a
+    row, invisible to `input_schema`."""
+
+    model_id: str
+    provider_model_id: str | None = None
+    fixed_inputs: dict[str, Any] = Field(default_factory=dict)
+    category_id: str
+    display_name: str
+    input_schema: list[dict[str, Any]]
+    pricing: dict[str, Any]
+    enabled: bool = True
+
+    model_config = {"protected_namespaces": (), "from_attributes": True}
+
+
+class KieModelPatch(BaseModel):
+    """PATCH /admin/kie-models/{model_id} — every field optional."""
+
+    provider_model_id: str | None = None
+    fixed_inputs: dict[str, Any] | None = None
+    category_id: str | None = None
+    display_name: str | None = None
+    input_schema: list[dict[str, Any]] | None = None
+    pricing: dict[str, Any] | None = None
+    enabled: bool | None = None
+
+    model_config = {"protected_namespaces": ()}
+
+
+class KieUploadResponse(BaseModel):
+    """POST /kie/uploads (ADR 0016) — a short-lived public URL for a Kie
+    image-to-image reference image. `r2_key` is only needed by the caller if
+    it later wants to reference this exact upload; the frontend itself only
+    ever needs `url` (placed into an `input_urls`-shaped field's value)."""
+
+    url: str
+    r2_key: str
+
+
+class KieCategoryAdmin(BaseModel):
+    """POST/PATCH /admin/kie-categories."""
+
+    id: str
+    display_name: str
+    output_type: str
+    enabled: bool = True
+
+    model_config = {"from_attributes": True}
+
+
 class JobResponse(BaseModel):
     id: uuid.UUID
     capability: str

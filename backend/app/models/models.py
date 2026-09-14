@@ -75,12 +75,21 @@ class Job(Base):
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
-    capability: Mapped[str] = mapped_column(String(32))  # tts | voice_model_training | image | music | video
+    # tts | voice_model_training | <a kie_categories.id, e.g. "text-to-image"> (ADR 0015) —
+    # for a Kie job this is the model's own category, not a fixed enum member,
+    # since the catalog (and so the set of real values here) grows by data.
+    capability: Mapped[str] = mapped_column(String(32))
     provider: Mapped[str] = mapped_column(String(32))  # azure | google | fish_audio | kie
     model_id: Mapped[str | None] = mapped_column(String(128), nullable=True)  # Kie only
 
     status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|processing|succeeded|failed
     provider_state: Mapped[str | None] = mapped_column(String(32), nullable=True)  # raw vendor state
+    # Kie's own taskId (ADR 0015) — set once `execute_kie_submit_job` calls
+    # createTask, so the webhook (looked up by this) and the poll-sweep cron
+    # (worker/cron.py) can both find their way back to this row. Every other
+    # provider is synchronous (submit() already returns terminal), so this
+    # is always null for them.
+    provider_job_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
 
     input: Mapped[dict] = mapped_column(JSONB)
     output: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
@@ -138,6 +147,65 @@ class Asset(Base):
     expires_at: Mapped[datetime | None] = mapped_column(_TZ, nullable=True)
 
     job: Mapped["Job"] = relationship(back_populates="asset")
+
+
+class KieCategory(Base):
+    """One row per Kie capability category, e.g. "text-to-image" (ADR 0015)
+    — hand-curated, never synced (Kie exposes no catalog/pricing API,
+    verified). `output_type` selects which frontend result-renderer a
+    category's jobs use (image/video/audio); adding a category whose
+    output_type already has a renderer is a pure data change end to end."""
+
+    __tablename__ = "kie_categories"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # e.g. "text-to-image"
+    display_name: Mapped[str] = mapped_column(String(128))
+    output_type: Mapped[str] = mapped_column(String(16))  # image | video | audio
+    enabled: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(_TZ, server_default=func.now())
+
+
+class KieModel(Base):
+    """One row per *catalog* model (ADR 0015) — `model_id` is our own
+    catalog's identifier (routing, display, `Job.model_id`), not always the
+    same as what's literally sent to Kie. `provider_model_id` is that real
+    Kie string (e.g. "flux-2/pro-text-to-image") — usually equal to
+    `model_id`, except when one real Kie model bundles several logically
+    distinct offerings behind an input field rather than separate model
+    strings (Veo 3.1's Lite/Fast/Quality tiers all really are
+    `provider_model_id="veo-3-1"` — verified against a real API call, ADR
+    0017): each tier still gets its own catalog row (own price, own display
+    name, own place in the model list) for the same reason Flux-2 Pro/Flex
+    already do, with `fixed_inputs` pinning the one field the tier actually
+    changes (`{"model": "veo3_fast"}`) — invisible to `input_schema`/the
+    user, merged into `input` at submission (services/jobs.py submit_kie_job).
+
+    `input_schema` drives the frontend's generic form; `pricing` drives the
+    credit hold at submission — settlement always uses Kie's own
+    `creditsConsumed` instead (services/jobs.py finalize_kie_job), never
+    this table."""
+
+    __tablename__ = "kie_models"
+
+    model_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    category_id: Mapped[str] = mapped_column(ForeignKey("kie_categories.id"), index=True)
+    display_name: Mapped[str] = mapped_column(String(128))
+    # The literal string sent as createTask's top-level "model" (ADR 0017).
+    # Equal to model_id for every model catalogued before Veo 3.1 — kept
+    # ourselves, never assumed the same as our own catalog id going forward.
+    provider_model_id: Mapped[str] = mapped_column(String(128))
+    # [{name, label, type: select|text|number|image|boolean, options?, default, required}, ...]
+    input_schema: Mapped[list] = mapped_column(JSONB)
+    # {"param": "resolution", "costs": {"1K": 5, "2K": 7}} (lookup) or
+    # {"flat": N} or {"rate_param": "duration", "tier_param": "resolution",
+    # "rates": {"480p": 2.4, ...}} (per-unit formula, ADR 0017) — see ADR 0015/0017.
+    pricing: Mapped[dict] = mapped_column(JSONB)
+    # Extra `input` fields this catalog row pins for every submission —
+    # never shown in input_schema, never user-editable (ADR 0017). {} for
+    # every model where the catalog row and the real Kie model are 1:1.
+    fixed_inputs: Mapped[dict] = mapped_column(JSONB, default=dict)
+    enabled: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(_TZ, server_default=func.now())
 
 
 class VoiceCatalog(Base):

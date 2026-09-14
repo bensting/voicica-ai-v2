@@ -80,9 +80,9 @@ export interface JobResponse {
   provider: string;
   status: "pending" | "processing" | "succeeded" | "failed";
   // Shape depends on `capability` — tts vs. voice_model_training (ADR 0009)
-  // have different input fields; both optional here rather than a
-  // discriminated union, since every call site only ever reads one or two
-  // fields of whichever job it already knows it has.
+  // vs. a Kie job (ADR 0015) have different input fields; all optional here
+  // rather than a discriminated union, since every call site only ever
+  // reads the field(s) of whichever job it already knows it has.
   input: {
     text?: string;
     voice_id?: string | null;
@@ -92,6 +92,10 @@ export interface JobResponse {
     pitch?: number;
     title?: string;
     reference_text?: string | null;
+    // Kie job (services/jobs.py submit_kie_job): `inputs` is whatever that
+    // model's `input_schema` declared, passed through verbatim.
+    model_id?: string;
+    inputs?: Record<string, string | number | boolean | string[]>;
   };
   output: { asset_url?: string | null; voice_model_id?: string } | null;
   error: string | null;
@@ -109,7 +113,9 @@ export interface GalleryItem {
   id: string;
   capability: string;
   provider: string;
-  input: { text: string };
+  // `text` (TTS) vs. `inputs.prompt` (a Kie job, ADR 0015) — the shape
+  // depends on `capability`/`provider`, same reasoning as JobResponse.input.
+  input: { text?: string; inputs?: Record<string, string | number | boolean | string[]> };
   output: { asset_url: string | null } | null;
   created_at: string;
 }
@@ -164,6 +170,101 @@ export interface VoiceModel {
   provider: string;
   state: string;
   created_at: string;
+}
+
+/** GET /kie/categories (ADR 0015) — one Kie capability category, e.g.
+ * "text-to-image". `output_type` picks which result renderer a category's
+ * jobs need — only "image" is handled today (app/create/kie/[id]/[modelId]),
+ * same restriction called out in the ADR. */
+export interface KieCategory {
+  id: string;
+  display_name: string;
+  output_type: "image" | "video" | "audio";
+}
+
+/** One field of a Kie model's schema-driven form (ADR 0015/0016). An
+ * "image" field means one or more reference photos (`multiple`, `max`
+ * caps how many — every model catalogued so far allows up to 8): the
+ * generation page uploads each one via `api.uploadKieReference()` as soon
+ * as it's picked, so by submission time this field's value is already the
+ * real URL(s) Kie needs, not a File. */
+export interface KieInputField {
+  name: string;
+  label: string;
+  type: "text" | "select" | "number" | "boolean" | "image" | "slider";
+  options?: string[];
+  default?: string | number | boolean;
+  required?: boolean;
+  note?: string;
+  multiple?: boolean;
+  // `image`: max number of files. `slider`/`number`: upper bound on the
+  // value (paired with `min` below) — same field name, meaning depends on
+  // `type`, same pattern `default`/`options` already follow.
+  max?: number;
+  // `slider`/`number` only: lower bound. A genuine continuous range (e.g.
+  // Grok's `duration`, 1-15 seconds) should be a `slider`, not a free-text
+  // `number` (ADR 0017, corrected after review) — a slider can't produce
+  // an out-of-range value at all (the browser clamps the drag itself),
+  // where a text field only describing its range in `note` never actually
+  // enforced it. `number` (with `min`/`max` still respected, on blur) stays
+  // available for a value someone would need to type rather than drag.
+  min?: number;
+  // `slider` only: step size between values. Defaults to 1.
+  step?: number;
+  // `select` only: Kie expects a real JSON number for this field (e.g.
+  // Veo's `duration`, an integer enum), not the string an option button
+  // would otherwise send — coerce on selection instead of leaving the
+  // caller to type a free-form number that Kie's own validation may
+  // reject (ADR 0017: a `type: "number"` free-text field let a user type
+  // an out-of-range value like 5 or 7 with no feedback until submission).
+  numeric?: boolean;
+}
+
+/** The credit-hold estimate only (ADR 0015/0017) — settlement always uses
+ * Kie's own reported cost, never this. Three shapes: a flat price, one
+ * field's value looked up in a table (e.g. `resolution`), or a per-unit
+ * rate looked up by one field and multiplied by another (e.g.
+ * credits-per-second-of-video by resolution). */
+export type KiePricing =
+  | { flat: number }
+  | { param: string; costs: Record<string, number>; default?: string }
+  | { rate_param: string; tier_param: string; rates: Record<string, number>; default?: string };
+
+/** POST /kie/uploads (ADR 0016) — a short-lived public URL for one
+ * reference image, plus its R2 key (only needed so the job that ends up
+ * using it can be told to clean it up — see `api.submitKie`). */
+export interface KieUploadResult {
+  url: string;
+  r2_key: string;
+}
+
+/** GET /kie/models(/:model_id) — one catalogued model. `model_id` is Kie's
+ * own real string and may contain a literal "/" (e.g.
+ * "flux-2/pro-text-to-image") — always percent-encode it in a URL. */
+export interface KieModel {
+  model_id: string;
+  category_id: string;
+  display_name: string;
+  // Denormalized from this model's category (ADR 0017) — which result
+  // renderer the generation page should use, without a second fetch.
+  output_type: "image" | "video" | "audio";
+  input_schema: KieInputField[];
+  pricing: KiePricing;
+}
+
+/** Mirrors backend/app/services/kie_catalog.py's estimate_cost() — an
+ * estimate for display only, purely client-side; the real hold amount is
+ * always computed server-side at submission. */
+export function estimateKieCost(pricing: KiePricing, values: Record<string, unknown>): number {
+  if ("flat" in pricing) return pricing.flat;
+  if ("rate_param" in pricing) {
+    const tierValue = String(values[pricing.tier_param] ?? pricing.default ?? "");
+    const rate = pricing.rates[tierValue] ?? Math.min(...Object.values(pricing.rates));
+    const amount = Number(values[pricing.rate_param]) || 0;
+    return Math.ceil(rate * amount);
+  }
+  const value = String(values[pricing.param] ?? pricing.default ?? "");
+  return pricing.costs[value] ?? Math.min(...Object.values(pricing.costs));
 }
 
 export const api = {
@@ -251,8 +352,17 @@ export const api = {
   /** Public — no auth needed (ADR 0010), though every call here still
    * carries a Bearer token since request() always attaches one when a user
    * is signed in; the backend just doesn't require it for this route. */
-  getGallery: (cursor?: string) =>
-    request<GalleryPage>(`/gallery${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`),
+  // `outputType` splits Explore into tabs (Voices/Images/Videos) — reuses
+  // the same audio/image/video vocabulary `KieModel.output_type` already
+  // carries, filtered server-side (`GET /gallery`'s own query, not a
+  // client-side filter) so pagination stays correct per tab.
+  getGallery: (options?: { cursor?: string; outputType?: "audio" | "image" | "video" }) => {
+    const params = new URLSearchParams();
+    if (options?.cursor) params.set("cursor", options.cursor);
+    if (options?.outputType) params.set("output_type", options.outputType);
+    const qs = params.toString();
+    return request<GalleryPage>(`/gallery${qs ? `?${qs}` : ""}`);
+  },
 
   getJob: (id: string) => request<JobResponse>(`/jobs/${id}`),
 
@@ -284,6 +394,59 @@ export const api = {
   setVisibility: (id: string, visibility: "public" | "private") =>
     request<JobResponse>(`/jobs/${id}?visibility=${visibility}`, {
       method: "PATCH",
+    }),
+
+  /** GET /kie/categories (ADR 0015) — the enabled Kie capability categories.
+   * Backs the model-list page's header; not the capability menu itself
+   * (that's still GET /config/menu — a category only ever appears there
+   * once an admin adds a menu item pointing at its route, same as any other
+   * capability). */
+  getKieCategories: () => request<KieCategory[]>("/kie/categories"),
+
+  /** GET /kie/models?category_id= — every enabled model in one category.
+   * Feeds the model-list page (app/create/kie/[categoryId]). */
+  getKieModels: (categoryId: string) =>
+    request<KieModel[]>(`/kie/models?category_id=${encodeURIComponent(categoryId)}`),
+
+  /** GET /kie/models/{model_id} — one model's full schema, for the
+   * generation page (app/create/kie/[categoryId]/[modelId]). `modelId` may
+   * contain a literal "/" (e.g. "flux-2/pro-text-to-image") — always
+   * encoded here, never assumed to be a single clean path segment. */
+  getKieModel: (modelId: string) => request<KieModel>(`/kie/models/${encodeURIComponent(modelId)}`),
+
+  /** POST /kie/uploads (ADR 0016) — uploads one reference image to a
+   * short-lived public R2 URL Kie's own servers can fetch (a "select a
+   * file" image field's value is never the File itself, always this call's
+   * `url`). Called once per file as soon as it's picked, not deferred to
+   * submission time. */
+  uploadKieReference: (file: File) => {
+    const formData = new FormData();
+    formData.set("file", file);
+    return requestForm<KieUploadResult>("/kie/uploads", formData);
+  },
+
+  /** POST /generate/kie (ADR 0015/0016) — one endpoint for every Kie model.
+   * Genuinely async under the hood (unlike TTS): the response is always
+   * `pending`, never already-finished — poll with pollJob() same as any
+   * other job. `inputs` is passed through to Kie verbatim, shaped by
+   * whatever `KieModel.input_schema` this model_id declared — an "image"
+   * field's value is a URL (or array of URLs) from `uploadKieReference()`,
+   * never a raw File. `uploadedR2Keys` are those same uploads' own keys,
+   * tracked only so the backend can delete them once this job finishes
+   * (ADR 0016) — omit for a model with no image field. */
+  submitKie: (
+    modelId: string,
+    inputs: Record<string, string | number | boolean | string[]>,
+    options?: { visibility?: "private" | "public"; uploadedR2Keys?: string[] },
+  ) =>
+    request<JobResponse>("/generate/kie", {
+      method: "POST",
+      body: JSON.stringify({
+        model_id: modelId,
+        inputs,
+        visibility: options?.visibility ?? "private",
+        uploaded_r2_keys: options?.uploadedR2Keys ?? [],
+      }),
     }),
 
   /** `output.asset_url` is a path on our own API (proxying R2 — see backend

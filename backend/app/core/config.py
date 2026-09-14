@@ -39,6 +39,17 @@ class Settings(BaseSettings):
     # against texttospeech.googleapis.com.
     google_tts_api_key: str | None = None
 
+    # Kie (ADR 0015) — wholesale model-catalog gateway (image/video/music).
+    kie_api_key: str | None = None
+    kie_base_url: str = "https://api.kie.ai"
+    # This backend's own publicly reachable URL, used only to build Kie's
+    # callBackUrl at submission time (e.g. "https://api.example.com"). None
+    # in local dev — there's nothing public for Kie to call back to, so
+    # providers/kie.py simply omits callBackUrl and completion is picked up
+    # by the poll-based cron sweep instead (worker/cron.py) — the webhook is
+    # the primary path once this is set, never a hard requirement.
+    public_base_url: str | None = None
+
     # Redis (ADR 0014) — the arq task queue behind background job execution.
     # A local, unauthenticated default so a fresh checkout at least imports
     # cleanly; real generation needs a real reachable Redis (see .env.example).

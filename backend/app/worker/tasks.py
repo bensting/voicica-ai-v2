@@ -46,3 +46,15 @@ async def run_voice_model_training_job(
             )
         except jobs.TransientProviderError as exc:
             raise Retry(defer=_RETRY_BACKOFF_SECONDS * ctx["job_try"]) from exc
+
+
+async def run_kie_submit_job(ctx: dict[str, Any], job_id: str) -> None:
+    """ADR 0014/0015's `queue:kie-submit` task — calls Kie's createTask only
+    and returns; never waits for Kie to finish generating. Completion
+    arrives later via `POST /webhooks/kie` or `worker/cron.py`'s poll sweep,
+    both calling `jobs.finalize_kie_job`, never this task again."""
+    async with async_session_factory() as db:
+        try:
+            await jobs.execute_kie_submit_job(db, uuid.UUID(job_id), job_try=ctx["job_try"])
+        except jobs.TransientProviderError as exc:
+            raise Retry(defer=_RETRY_BACKOFF_SECONDS * ctx["job_try"]) from exc
