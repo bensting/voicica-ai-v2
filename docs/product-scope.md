@@ -51,7 +51,7 @@ Nothing left blocking the table itself. Remaining open items — pricing numbers
 
 Open items (don't block building the ledger, but need answers before it's complete):
 - Exact pricing formulas/numbers per capability and per Kie `model_id` — filled in as config as each capability is implemented. For simple per-character/per-call rates (not Kie's structural catalog), these live in `app_settings` ([ADR 0012](decisions/0012-app-settings-table.md)) and are tunable without a deploy — seeded with placeholder values (e.g. `tts_credits_per_10_chars = 1`) rather than blocking on a "final" number.
-- Top-up mechanism (payment provider) — not yet chosen; will need its own ADR once decided. Until then, new users get a seeded signup bonus (`app_settings.signup_bonus_credits`, placeholder 500) instead of real purchased credits.
+- Top-up mechanism (payment provider) — not yet chosen; will need its own ADR once decided. Until then, new users get a seeded signup bonus (`app_settings.signup_bonus_credits`, placeholder 50) instead of real purchased credits.
 
 Resolved since first written: Kie reports its own cost per task (`creditsConsumed`), so `actual_cost` settlement for Kie is derived from that directly, 1:1, rather than guessed — verified end to end (a real `flux-2/pro-text-to-image` job settled for exactly the 5 credits Kie reported) — see [ADR 0003](decisions/0003-credit-ledger-hold-then-settle.md), [ADR 0015](decisions/0015-kie-model-catalog.md) and [architecture.md §3d](architecture.md).
 

@@ -13,7 +13,7 @@ from app.models.models import AppSetting
 # before seeding). Once a row exists, the DB value always wins — these are not
 # "the real values", just what unblocks a brand new environment.
 _DEFAULTS: dict[str, Any] = {
-    "signup_bonus_credits": 500,
+    "signup_bonus_credits": 50,
     "tts_credits_per_10_chars": 1,
     # Fish Audio's TTS model (providers/fish_audio.py) — a scalar an admin
     # should be able to bump the moment Fish ships a new recommended model,

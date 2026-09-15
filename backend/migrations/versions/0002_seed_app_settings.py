@@ -18,7 +18,7 @@ branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 
 _SEED = {
-    "signup_bonus_credits": 500,
+    "signup_bonus_credits": 50,
     "tts_credits_per_10_chars": 1,
 }
 

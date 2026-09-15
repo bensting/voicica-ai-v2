@@ -18,7 +18,7 @@ Split "config" into two categories, going forward:
 
 Admin's minimal scope for the current slice ([ADR 0005](0005-frontend-surfaces.md)'s deferred detail) gains one generic capability: `GET /admin/settings`, `PATCH /admin/settings/{key}`. Still no bespoke UI — callable via script for now, same posture as the rest of this slice's admin surface (manual credit grant, job monitoring).
 
-Seeded initial values (placeholders, tunable anytime, not a business decision this ADR is making): `signup_bonus_credits = 500`, `tts_credits_per_10_chars = 1`.
+Seeded initial values (placeholders, tunable anytime, not a business decision this ADR is making): `signup_bonus_credits = 50` (originally seeded at 500, lowered via `PATCH /admin/settings/signup_bonus_credits` once real deploy costs made 500 look too generous for a placeholder — not a re-derivation of this ADR's own reasoning, just the number moving), `tts_credits_per_10_chars = 1`.
 
 **A third kind of value turned out to fit here too, not just business/ops levers**: `fish_tts_model` (which Fish Audio TTS model `providers/fish_audio.py` sends — added when a user asked how a future Fish Audio model upgrade would be handled). It's a single scalar an *engineer* would change, not growth/ops — but the reason it belongs here is the same one this ADR already argues: the value can change on the *vendor's* schedule, not ours, and a config row an admin can `PATCH` immediately is strictly better than a code change + deploy for something that's just "which string do we send," with no logic attached to which value it is.
 
