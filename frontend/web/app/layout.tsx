@@ -17,7 +17,10 @@ const hanken = Hanken_Grotesk({
 
 export const metadata: Metadata = {
   title: "Voicica",
-  description: "AI voice, image, music, and video generation.",
+  // Kept in sync with what's actually shipped (content/marketing/en.ts,
+  // ADR 0019) — music generation has no models catalogued yet, don't
+  // advertise it here just because the old project's copy did.
+  description: "AI voice, image, and video generation.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
