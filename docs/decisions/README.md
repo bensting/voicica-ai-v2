@@ -59,3 +59,4 @@ What this makes easier, what it makes harder, what it locks in.
 | [0020](0020-admin-folded-into-web.md) | Admin folded into `frontend/web`, not a separate deployment | Accepted |
 | [0021](0021-dedicated-landing-page-and-analytics.md) | Dedicated landing page (`/get`) for all future traffic, GA4 via Firebase Analytics | Accepted |
 | [0022](0022-frontend-deploy-cloudflare-workers.md) | Frontend deployed to Cloudflare Workers via OpenNext | Accepted |
+| [0023](0023-backend-deploy-render-singapore.md) | Backend deployed to Render, Singapore region | Accepted |

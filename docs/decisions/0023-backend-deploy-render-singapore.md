@@ -1,0 +1,40 @@
+# ADR 0023: Backend Deployed to Render, Singapore Region
+
+- Status: Accepted
+- Date: 2026-09-15
+
+## Context
+
+The backend had never been deployed anywhere public — local-dev-only, `PUBLIC_BASE_URL` (Kie's webhook callback target) left blank the whole time for exactly that reason. `frontend/web` went live first (ADR 0022, Cloudflare Workers) for a narrower, specific reason (a payment-gateway application needing a real `/contact` page); the backend catching up is what makes `(app)`/`(admin)` — everything actually gated by login — work on the live domain.
+
+**This isn't Cloudflare Workers for the backend** — [ADR 0006](0006-database-orm-choice.md) already tried and rejected that, for speed reasons unrelated to this decision. The backend needs a genuinely different runtime shape than the frontend anyway: not just request/response, but a long-running background worker process (`worker/run_all.py`, ADR 0014) continuously polling Redis queues — a shape Workers' stateless, per-request execution model was never going to fit, which is exactly why ADR 0006 rejected it for this.
+
+## Decision
+
+**Render**, chosen over Railway/Fly.io after checking current (2026) pricing and regional coverage for all three rather than assuming — Render's explicit **Background Worker** service type is a direct match for `worker/run_all.py`'s existing shape (ADR 0014 already consolidated every provider queue + the cron sweep into one process specifically so there'd be one thing to start instead of several — that design decision turned out to double as the natural unit for Render's worker service, with no changes needed to fit it). Two services from this one repo:
+
+- **Web Service** (`voicica-api`) — `uvicorn app.main:app`, build runs `alembic upgrade head` so schema migrations happen automatically on deploy.
+- **Background Worker** (`voicica-worker`) — `python -m app.worker.run_all`, no migration in its own build (the web service's already ran it against the same database).
+
+Both on Render's **free compute tier** for now (per-service, not a workspace-plan limitation — Render's actual compute pricing is a separate table from the Hobby/Pro/Scale workspace plans, easy to miss on their pricing page since the plan tiers are shown first) — acceptable because nothing is live-and-depended-on yet; upgrade to the paid tier (removes the cold-start/sleep behavior) before real users are expected to hit this reliably.
+
+**Region: Singapore, for every piece — Render, Neon, and Upstash alike.** This was almost gotten wrong: the existing Neon database was in `us-east-2` (US East), a leftover from before this question was ever asked. Putting Render's compute in Singapore while the database stayed in Ohio would have made things *worse* than picking either region alone — every request now pays full trans-Pacific latency on top of Render-to-Neon latency, satisfying neither "close to the target market" nor "close to the database." Resolved by standing up a **new** Neon project in `ap-southeast-1` rather than trying to migrate the existing one in place (Neon has no in-place region change — it's a new project + data migration either way) — and since this is a personal project pre-launch with no real user data worth preserving yet (confirmed explicitly rather than assumed), the old `us-east-2` project was abandoned outright instead of migrating its data over. Upstash Redis was already in Singapore, needing no change.
+
+**Migrations run against a fresh database for the first time ever, surfacing a real bug**: `migrations/versions/0009_kie_catalog.py` imported `app/services/kie_catalog.py`'s `_SEED_CATEGORIES`/`_SEED_MODELS` unfiltered — correct when it was first written (the constant only had `text-to-image` in it then), broken by the time `0010`/`0011` had grown that same constant to include their own categories too, since every real database until now had these migrations applied one at a time, as each was written — never all at once from empty. `0009` bulk-inserted the *current* (full) catalog, and `0010` then failed on a duplicate primary key re-inserting `image-to-image`. Fixed by giving `0009` the same self-filtering (`_OWN_CATEGORY_IDS = {...}`) pattern `0010`/`0011` already used — a migration that seeds from a shared, still-growing constant must filter to exactly what it introduced, never trust the constant's current shape. Verified by re-running the full chain (`0001`→`0011`) against the fresh Singapore database: `kie_categories` has exactly 3 rows, `kie_models` exactly 10, no duplicates, and Postgres's transactional-DDL behavior meant the earlier failed attempt had already cleanly rolled `0001`-`0009` back too — nothing to hand-clean.
+
+**A second real gap caught live, not anticipated**: the first real deploy copied every value from local `.env` into Render's environment variables wholesale, including `CORS_ALLOW_ORIGINS=["http://localhost:3000"]` — which silently blocks every request from the real frontend (`voicica.ai`) once deployed, confirmed with a real cross-origin `curl` against the live service (`Disallowed CORS origin`, 400). `PUBLIC_BASE_URL` has the same class of problem in the other direction (blank is correct locally, wrong once there's a real public URL for Kie's webhook to reach). Both are now called out explicitly in `.env.example` and `backend/README.md`'s Deploy section as **differing by environment** — a distinction that didn't previously exist anywhere in the docs, because there was never a second environment to differ from before this.
+
+## Alternatives considered
+
+- **Railway or Fly.io instead of Render.** Both are capable, both now have Singapore regions too — Render won on the closest match to the existing two-process (web + worker) shape via a first-class Background Worker type, and more predictable flat-fee pricing over Railway's usage-based billing. Not a strong rejection of either alternative, just the closer fit today.
+- **A checked-in `backend/.env.production`, mirroring the frontend's (ADR 0022).** Rejected — the frontend's version holds only values already meant to be public (`NEXT_PUBLIC_*`, baked in at Next.js build time); the backend's equivalent would be real secrets (DB password, provider API keys, Firebase Admin credentials) that must never be committed, public repo or not. The right analogue is documentation (the Deploy section's table) plus Render's own environment-variable store, not a file shaped like the frontend's.
+- **Migrating the existing `us-east-2` Neon project's data to Singapore.** Rejected on the user's own explicit call — no real user data existed yet worth the migration effort, and "one environment going forward, not two to keep in sync" was stated as a deliberate constraint given this is a single-maintainer project.
+
+## Consequences
+
+**Positive:** the backend is live, in the same region as its own database and Redis (no self-inflicted cross-region latency), with the free tier costing nothing while nothing depends on it being always-on yet. The migration chain is now actually safe to run against a genuinely empty database — a real gap that existed silently until this was the first time anyone tried it.
+
+**Negative / open items:**
+- Free-tier compute sleeps after inactivity — fine for now, needs upgrading to the paid tier (per-service, ~$7/mo each) before this should be relied on for real user traffic.
+- No CI/CD beyond Render's own auto-deploy-on-push — acceptable at this scale, matching the same open item ADR 0022 already noted for the frontend.
+- The abandoned `us-east-2` Neon project still exists (not deleted) — harmless but a small recurring cost/clutter until manually cleaned up.
