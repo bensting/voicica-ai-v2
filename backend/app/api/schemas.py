@@ -227,6 +227,14 @@ class JobResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AdminJobResponse(JobResponse):
+    """GET /admin/jobs (ADR 0020) — the one field `JobResponse` deliberately
+    leaves out for its normal, single-user callers (`GET /jobs`): whose job
+    this is. An admin job monitor spanning every user is useless without it."""
+
+    user_id: str
+
+
 class GalleryItemResponse(BaseModel):
     """GET /gallery — one public creation (ADR 0010). Deliberately leaner
     than JobResponse: no estimated_cost/actual_cost/error/visibility — those

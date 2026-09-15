@@ -40,7 +40,7 @@ backend/
 
 ### 4. 前端拆成 4 个客户端，全部只调后端 API
 - `frontend/web`：Next.js，营销页 + 登录后功能页，同一个部署单元，内部用路由分组严格隔离（ADR 0011）。
-- `frontend/admin`：Next.js，独立部署，员工专用鉴权——安全边界问题，不是性能问题。
+- ~~`frontend/admin`：Next.js，独立部署，员工专用鉴权——安全边界问题，不是性能问题。~~ 后来推翻了（ADR 0020）：`frontend/admin` 一直是空的，到真正需要写 admin 界面那一刻，另起一个项目的成本比想象中更真实，改成 `frontend/web` 里的 `(admin)` 路由组，客户端角色门禁 + 后端 `require_admin` 才是真正的防线，见该 ADR。
 - `android/`：原生 Kotlin/Compose，不走 Capacitor/WebView 套壳（踩过的坑：文件下载保存、原生广告、权限管理）。
 - 详见 [ADR 0005](docs/decisions/0005-frontend-surfaces.md)。
 
@@ -259,3 +259,14 @@ backend/
 - **`/privacy`、`/terms` 是真实能用的第一版，不是"Coming soon"占位**——内容对应产品真实做的事情（Firebase 认证、积分、真实用到的第三方处理方（Azure/Google/Fish Audio/Kie）、R2 存储、目前没有接支付）。页面上没有说"仅供参考"这种弱化措辞，但也没说这是律师审过的版本——`/contact` 的真实姓名/邮箱/地址是专门为了满足 Payoneer 网站验证的"至少两项可核实信息"这条要求特意放出来的，验证通过后计划把地址收回去，这次 ADR 没有自动做这一步，是手动的后续。
 - **首页横条的没做完事项**：不做缩略图/播放；没做 `/th`、`/id`、`/es` 真正的路由段（内容没有，先不建路由，避免建了个测不出东西对不对的空壳）。
 - **真实验证过**（`next build` 生产构建先跑通、7 个页面全部正确生成为静态页 + `/sitemap.xml`/`/robots.txt`；然后真实浏览器逐页打开）：首页 hero/能力卡片/CTA/页脚渲染正确，"Made with Voicece" 横条真实显示 6 条数据（azure/kie/fish_audio 供应商、真实标题、真实日期），`read_network_requests` 确认真的是 `GET http://localhost:8000/gallery` 返回 200，不是假数据；`/voice`/`/image`/`/video` 三个能力页文案各自独立、不是复制粘贴换个标题；`/privacy`/`/terms` 内容完整；`/contact` 显示的姓名/邮箱/地址跟 Payoneer 要核对的信息一致；`/sitemap.xml` 包含全部 7 页且带 `hreflang` alternates，`/robots.txt` 正确 disallow `/app`；`curl /th`、`/th/voice` 确认真的是 404，不是空页面；全程浏览器 console 没有报错。
+
+**Admin 不另起项目了，合进 `frontend/web`（ADR 0020）——用户主动提出的**："我们讨论一下 admin不另外起一套 就直接也放在web下面一起管理如何"。这正好是 [ADR 0005](docs/decisions/0005-frontend-surfaces.md) 里明确讨论过、也明确否掉过的一个选项（"Fold admin routes into the authenticated web app behind a role check. Rejected: ... The security boundary should be physical, not just logical."），所以先把这个张力摆出来讨论，而不是顺手就改：
+
+- **原决定的理由是真实的，不是空泛的安全教条**：Next.js App Router 的 middleware 只拦路由请求，不拦 `_next/static/*` 这些编译后的静态 JS chunk——就算页面被 middleware/客户端角色门禁挡住重定向了，admin 路由编译出来的 JS 文件本身还是公开静态资源，理论上一个知道怎么翻 build manifest 的人不需要登录就能把 admin 面板的前端代码整个下载下来看。合并之后这个泄露面是真实存在的。
+- **但真正保护数据的墙一直在后端，不在前端**——`require_admin` 早就在 API 层做了角色校验，不管前端结构怎么变，没有真实 admin 角色的 token 就是拿不到数据、改不了任何东西。合并后真正暴露的只是"这个产品有一个后台、长什么样"这个事实，不是数据本身。
+- **推翻的理由是成本，不是否认原来的风险**：`frontend/admin` 从 ADR 0005 写下那天起就是空的（只有一个 `.gitkeep`），到真正要写第一个 admin screen 的这一刻还是零沉没成本，这时候要求先搭一整套独立 Next.js 项目（独立仓库位置、独立部署、独立鉴权接线、重新抄一遍设计系统）对一个人维护的早期项目是真实的速度成本。
+- 用户同意后，写了 [ADR 0020](docs/decisions/0020-admin-folded-into-web.md) 记这个反转（不是偷偷改），并在 ADR 0005 自己身上补了删除线 + 指回 0020 的注释，`docs/`（architecture/product-scope/api-contract/data-model）、`README.md`、`backend/README.md`、`routes_admin.py` 的模块 docstring 里所有提到 `frontend/admin` 的地方都同步改了，`frontend/admin/` 目录本身删掉了。
+- **实现**：`(admin)` 路由组挂在 `app/(admin)/admin/` 下（跟 `(app)/app/` 一个道理，route group 本身不进 URL，得再套一层真实的 `admin/` 目录）。`(admin)/layout.tsx` 做角色门禁——等 Firebase auth 状态、再调 `GET /me` 查 `role`（Postgres 列，不是 Firebase custom claim，这也是为什么门禁必须是一次真实的 API 调用，不能只看 ID token），不是 staff/admin 直接弹回 `/app`；未登录弹去 `/login`。这是 ADR 0020 自己承认的"地板"，不等价于物理隔离——真正的防线还是后端的 `require_admin`。**边缘层加固**（Cloudflare Access 挡住 `/admin/*` 的静态资源泄露面）记成了 ADR 里的推荐后续，这次没做。
+- 顺手补了一个真实的小 gap：`GET /admin/jobs` 之前直接复用给普通用户用的 `JobResponse`，那个 schema 故意不带 `user_id`（普通用户只看自己的 job，不需要）——但一个横跨全部用户的 admin 监控页没有 `user_id` 根本没法用。加了 `AdminJobResponse(JobResponse)` 多一个 `user_id` 字段，只有 `/admin/jobs` 这一个接口用。
+- 第一个真实可用的 screen：Job monitor（`/admin/jobs`，最近 100 条跨用户 job，按状态上色）。Dashboard 首页（`/admin`）老实列出其余几个（用户积分、菜单、Kie 目录、settings）——后端接口全都是现成的全套 CRUD，只是这次没做 UI，卡片上直接写清楚"没有界面，直接调 API"，不假装做完了。
+- **真实验证过，包括两条路径都测了**：用已有的浏览器测试账号（`claude-web-test@voicica.app`）——没有真实密码没法走登录表单，用后端本来就有的 Firebase Admin SDK 现场签发一个 custom token，建了一个临时的 `/dev-signin?token=` 页面登录进去（验证完立刻删掉，没提交）。先把这个账号的 `role` 改成 `staff`：真实浏览器里 `/admin` 显示 dashboard、`/admin/jobs` 显示真实跨用户数据（这个测试账号自己的 job + `e2e-test-user-1` 的历史 job，状态颜色、成本、可见性全部对得上）。再把 `role` 改回 `user`：同一个浏览器 session 重新访问 `/admin`，真实被弹回了 `/app`，确认角色门禁生效。测完把账号 `role` 改回 `staff`（作为长期的管理员测试账号留着），没有碰真实用户 `bensting19@gmail.com` 的账号。

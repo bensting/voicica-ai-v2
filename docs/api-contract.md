@@ -1,6 +1,6 @@
 # API Contract
 
-The backend's HTTP surface, consumed identically by `frontend/web`, `frontend/admin`, and `android/` ([ADR 0005](decisions/0005-frontend-surfaces.md)). This is mostly a direct consequence of decisions already made elsewhere — endpoints aren't re-argued here, they're assembled from the ADRs and linked back to them. Where something genuinely needed a fresh call, it's marked.
+The backend's HTTP surface, consumed identically by `frontend/web` (marketing, product app, and admin alike) and `android/` ([ADR 0005](decisions/0005-frontend-surfaces.md)/[ADR 0020](decisions/0020-admin-folded-into-web.md)). This is mostly a direct consequence of decisions already made elsewhere — endpoints aren't re-argued here, they're assembled from the ADRs and linked back to them. Where something genuinely needed a fresh call, it's marked.
 
 ## Conventions
 
@@ -90,7 +90,7 @@ Backed by a single `app_settings` row (key `capability_menu`, a JSON array — n
 
 ### Admin
 
-Separate app/deployment ([ADR 0005](decisions/0005-frontend-surfaces.md)), own route namespace, gated by `users.role`. Full feature scope still deferred by request — but the current slice needs a minimal set, callable via script for now (no `frontend/admin` UI yet):
+An `(admin)` route group inside `frontend/web`, not a separate app ([ADR 0020](decisions/0020-admin-folded-into-web.md)) — own route namespace, gated by `users.role`. Full feature scope still deferred by request:
 
 | Method & path | Auth | Purpose |
 |---|---|---|

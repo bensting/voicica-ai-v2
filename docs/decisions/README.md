@@ -56,3 +56,4 @@ What this makes easier, what it makes harder, what it locks in.
 | [0017](0017-kie-video-and-catalog-splitting.md) | Kie video category, per-unit pricing, and catalog rows outnumbering real Kie models | Accepted |
 | [0018](0018-realtime-job-updates-sse.md) | Real-time job completion via Redis pub/sub + SSE, replacing inline blocking polls | Accepted |
 | [0019](0019-marketing-site-scope-and-i18n.md) | Marketing site — page scope, content strategy, and i18n registration | Accepted |
+| [0020](0020-admin-folded-into-web.md) | Admin folded into `frontend/web`, not a separate deployment | Accepted |

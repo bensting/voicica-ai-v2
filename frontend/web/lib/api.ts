@@ -106,6 +106,12 @@ export interface JobResponse {
   completed_at: string | null;
 }
 
+/** GET /admin/jobs (ADR 0020) — the one field `JobResponse` deliberately
+ * leaves out for its normal, single-user callers: whose job this is. */
+export interface AdminJobResponse extends JobResponse {
+  user_id: string;
+}
+
 /** GET /gallery — one public creation (ADR 0010). Deliberately leaner than
  * JobResponse: no cost/error/visibility fields, no creator identity —
  * nothing a gallery viewer (possibly not the owner) needs. */
@@ -462,4 +468,11 @@ export const api = {
     const blob = await res.blob();
     return URL.createObjectURL(blob);
   },
+
+  // ---- Admin (ADR 0020) — `frontend/web`'s `(admin)` route group. The
+  // real enforcement is `require_admin` on every one of these routes
+  // server-side, not this frontend's own role gate. ----
+
+  /** GET /admin/jobs — the last 100 jobs across every user, newest first. */
+  adminListJobs: () => request<AdminJobResponse[]>("/admin/jobs"),
 };

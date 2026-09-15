@@ -8,7 +8,7 @@ Who talks to the system, and what it talks to.
 graph LR
     User(("End user")) --> Web["frontend/web<br/>(Next.js — marketing + app)"]
     User --> App["android/<br/>(native Kotlin/Compose)"]
-    Staff(("Staff")) --> Admin["frontend/admin<br/>(Next.js, staff-only)"]
+    Staff(("Staff")) --> Admin["frontend/web (admin)<br/>route group, staff-only — ADR 0020"]
 
     Web -->|"API calls"| Backend["AI Voice Labs Backend<br/>(FastAPI)"]
     App -->|"API calls"| Backend

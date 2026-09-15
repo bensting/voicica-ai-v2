@@ -1,6 +1,8 @@
 """Minimal admin surface for this slice (ADR 0012's deferred-admin-scope note):
-manual credit grants (stand-in for real top-up), job monitoring, and reading/
-writing app_settings. No `frontend/admin` UI yet — call these with a script.
+manual credit grants (stand-in for real top-up), job monitoring, capability
+menu and Kie catalog CRUD, and reading/writing app_settings. Consumed by
+`frontend/web`'s `(admin)` route group (ADR 0020) — every route stays
+directly callable (curl, `/docs`) for anything the UI doesn't cover yet.
 """
 
 from typing import Any
@@ -11,8 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import APIError
 from app.api.schemas import (
+    AdminJobResponse,
     CreditGrantRequest,
-    JobResponse,
     KieCategoryAdmin,
     KieModelAdmin,
     KieModelPatch,
@@ -64,15 +66,15 @@ async def grant_credits(
     return MeResponse(id=user.id, email=user.email, role=user.role, balance=balance)
 
 
-@router.get("/jobs", response_model=list[JobResponse])
+@router.get("/jobs", response_model=list[AdminJobResponse])
 async def list_all_jobs(
     _admin: CurrentUser = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
-) -> list[JobResponse]:
+) -> list[AdminJobResponse]:
     rows = (
         await db.execute(select(Job).order_by(Job.created_at.desc()).limit(100))
     ).scalars().all()
-    return [JobResponse.model_validate(row) for row in rows]
+    return [AdminJobResponse.model_validate(row) for row in rows]
 
 
 @router.get("/settings", response_model=dict[str, Any])

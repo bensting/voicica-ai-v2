@@ -47,14 +47,13 @@ Three ideas carry the whole design:
 .
 ├── backend/            # FastAPI app: providers/, services/, api/, core/
 ├── frontend/
-│   ├── web/             # Next.js: marketing + authenticated app, one deployable
-│   └── admin/            # internal tool, separate deployment, staff-only
+│   └── web/             # Next.js: marketing + authenticated app + admin, one deployable
 ├── android/             # native Kotlin/Compose app — calls the backend API directly
 ├── docs/               # All engineering documentation — start at docs/README.md
 └── CLAUDE.md           # Working notes for AI-assisted development on this repo
 ```
 
-Four client surfaces (`frontend/web`, `frontend/admin`, `android/`) share one backend API — none of them talks to a provider or holds business logic directly. See [ADR 0005](docs/decisions/0005-frontend-surfaces.md).
+Three client surfaces (`frontend/web` — marketing, product app, and admin, internally separated by route group — and `android/`) share one backend API — none of them talks to a provider or holds business logic directly. See [ADR 0005](docs/decisions/0005-frontend-surfaces.md)/[ADR 0020](docs/decisions/0020-admin-folded-into-web.md).
 
 ## Documentation
 
@@ -74,4 +73,4 @@ backend/README.md        # FastAPI setup — Postgres, Firebase Admin SDK, Fish 
 frontend/web/README.md   # Next.js setup — Firebase web config, points at the backend
 ```
 
-Both need real third-party credentials to run (see those READMEs for exactly which). `frontend/admin` and `android/` aren't started.
+Both need real third-party credentials to run (see those READMEs for exactly which). `android/` isn't started; admin ([ADR 0020](docs/decisions/0020-admin-folded-into-web.md)) lives inside `frontend/web` as an `(admin)` route group.

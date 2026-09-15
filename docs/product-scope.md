@@ -57,15 +57,15 @@ Resolved since first written: Kie reports its own cost per task (`creditsConsume
 
 ## 3. Frontend surfaces
 
-**Decided** — see [ADR 0005](decisions/0005-frontend-surfaces.md) for the full reasoning. Four surfaces, all plain consumers of the same backend API:
+**Decided** — see [ADR 0005](decisions/0005-frontend-surfaces.md)/[ADR 0020](decisions/0020-admin-folded-into-web.md) for the full reasoning. Three surfaces, all plain consumers of the same backend API:
 
 ```mermaid
 graph TD
     subgraph web ["frontend/web — one deployable, route-group separated (Next.js)"]
         Public["(marketing) route group<br/>public, no login, no capability usage"]
         App["(app) route group<br/>every capability + history + credit balance, all behind login"]
+        Admin["(admin) route group<br/>staff-only, client-side role gate — ADR 0020<br/>user mgmt, credit adjustments, job monitoring, pricing/model config"]
     end
-    Admin["frontend/admin<br/>separate deployment, staff-only auth<br/>user mgmt, credit adjustments, job monitoring, pricing/model config"]
     Android["android/<br/>native Kotlin/Compose, calls the backend API directly — no WebView"]
     API[("Backend API")]
 
@@ -77,7 +77,7 @@ graph TD
 
 - **Marketing** (`(marketing)` route group): public, no login, no capability usage. **Built** ([ADR 0019](decisions/0019-marketing-site-scope-and-i18n.md)) — seven pages: `/` (home), `/voice`, `/image`, `/video`, `/privacy`, `/terms`, `/contact`. No pricing page yet (no real numbers, §2) and no music page yet (no Kie models catalogued for it). English only — Thai/Indonesian/Spanish are a content-file addition later, not a routing rewrite (ADR 0019's i18n section). The public gallery (jobs marked `visibility: public`, [ADR 0010](decisions/0010-public-gallery-visibility-flag.md)) contributes real, unauthenticated `GET /gallery` data to the homepage (captions/counts, not media playback — asset bytes still require a logged-in viewer).
 - **Product app** (`(app)` route group, same deployable as marketing but strictly separated in code): every capability in the matrix above, plus history and credit balance/usage — all gated by login (§1.1). History entries stay viewable within the asset retention window ([ADR 0004](decisions/0004-asset-mirroring-r2-retention.md)), not just the ~24h the provider itself keeps the file.
-- **Admin**: internal tool, separate app/deployment, staff-only auth. Exact feature scope not decided yet (deferred — see ADR 0005's open items) beyond the general shape: user/credit management, job monitoring, provider and pricing config.
+- **Admin** (`(admin)` route group, same deployable, [ADR 0020](decisions/0020-admin-folded-into-web.md)): not a separate app/deployment as ADR 0005 originally called for — reversed once `frontend/admin` reached admin-screens-actually-needed time still completely empty. Gated client-side by role (`GET /me`'s `role`, a Postgres column, not a Firebase claim), same pattern `(app)`'s own login gate uses; the real enforcement stays server-side (`require_admin` on every `/admin/*` backend route) regardless. Exact feature scope beyond the general shape (user/credit management, job monitoring, provider and pricing config) still not fully decided — deferred.
 - **Android**: fully native, not a wrapped website — calls the backend API the same way the web app does. Chosen over wrapping (e.g. Capacitor) because of Android-specific friction: saving generated files to the gallery, native ad integration (ads are a planned monetization channel alongside credits — see §2), and runtime permission handling.
 
 ## 4. Out of scope (for now)
