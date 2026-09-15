@@ -38,7 +38,7 @@ This document defines *what* the platform does and for *whom*, before `architect
 
 ### 1.2 Open questions still blocking this table
 
-Nothing left blocking the table itself. Remaining open items — pricing numbers, asset persistence numbers, gallery retention/moderation specifics — tracked in §2, §3, and [architecture.md §5](architecture.md).
+Nothing left blocking the table itself. Remaining open items — pricing numbers, asset persistence numbers, gallery retention/moderation specifics — tracked in §2, §3, and [architecture.md §6](architecture.md).
 
 ## 2. Credits / billing
 

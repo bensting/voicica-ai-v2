@@ -253,7 +253,50 @@ backend/
 
 **Data model**: the full schema (tables, ER diagram, notes) lives in [`data-model.md`](data-model.md), built on Postgres ([ADR 0006](decisions/0006-database-orm-choice.md)) — not duplicated here to avoid the two drifting apart.
 
-## 5. Open questions
+## 5. Deployment topology
+
+Where each piece in the diagrams above actually runs, as of [ADR 0022](decisions/0022-frontend-deploy-cloudflare-workers.md) (frontend) and [ADR 0023](decisions/0023-backend-deploy-render-singapore.md) (backend) — this is a separate concern from section 1's *logical* module boundaries, and drifts independently of them.
+
+```mermaid
+graph LR
+    User(("Browser / Android")) --> CFWorker
+
+    subgraph CF ["Cloudflare Workers — global edge (ADR 0022)"]
+        CFWorker["voicica Worker<br/>frontend/web via OpenNext<br/>voicica.ai / www.voicica.ai"]
+    end
+
+    CFWorker -->|"API calls"| API
+
+    subgraph Render ["Render — Singapore region (ADR 0023)"]
+        API["voicica-api<br/>Web Service<br/>uvicorn app.main:app"]
+        Worker["voicica-worker<br/>Background Worker<br/>python -m app.worker.run_all"]
+    end
+
+    subgraph SGData ["Also Singapore — same region on purpose (ADR 0023)"]
+        DB[("Neon Postgres")]
+        Redis[("Upstash Redis")]
+    end
+
+    API --> DB
+    API -->|"enqueue (ADR 0014)"| Redis
+    API -.->|"SSE push, per-user channel<br/>(ADR 0018)"| Redis
+    Worker --> DB
+    Worker -->|"poll queues"| Redis
+    Worker --> Providers[("Azure / Google /<br/>Fish Audio / Kie")]
+    Worker --> R2[("Cloudflare R2")]
+
+    API --> FB[("Firebase Auth")]
+```
+
+A few things this diagram makes explicit that the ADRs only say in prose:
+
+- **Same repo, two Render services** (`Root Directory: backend`) — `voicica-api` (Web Service, does `alembic upgrade head` on build) and `voicica-worker` (Background Worker, no migration — the web service's build already ran it). They share one Postgres database and one Redis instance; nothing else talks to either directly.
+- **Render, Neon, and Upstash are all pinned to Singapore deliberately** — ADR 0023's own finding was that picking Render's region without checking the database's real region first would've made things worse than either alone (compute near users, database far away). Cloudflare Workers isn't region-pinned the same way — it runs at Cloudflare's edge globally, which fits a mostly-static/prerendered marketing surface plus a thin API-consuming client (ADR 0005) better than a single-region deploy would.
+- **Firebase Auth, the four provider APIs, and R2 aren't deployment choices this project controls the region of** — they're external services reached over the public internet from wherever `voicica-api`/`voicica-worker` happen to run, not colocated infrastructure.
+- **Two different deploy mechanisms, easy to mix up**: Render auto-deploys on every push to `main` (connected to this GitHub repo); Cloudflare has no CI/CD wired up yet — a frontend change needs a manual `npm run deploy` (`opennextjs-cloudflare build && opennextjs-cloudflare deploy`) even after it's merged, or it simply won't reach `voicica.ai`.
+- **Real, environment-specific config lives in two different places, neither of them the repo**: Render's own environment-variable store (`CORS_ALLOW_ORIGINS`, `PUBLIC_BASE_URL`, per-environment values — see `backend/README.md`'s Deploy table) plus its **Secret Files** feature for the one value too easy to mangle through a plain env-var text box (the Firebase service-account JSON, mounted at `/etc/secrets/firebase-adminsdk.json` and referenced via `FIREBASE_CREDENTIALS_PATH`); Cloudflare's build-time values live in `frontend/web/.env.production.local`, deliberately never committed (ADR 0022). No `.env*` file with real values exists in this repo, on either side.
+
+## 6. Open questions
 
 - Frontend framework, database, and auth are all decided (Next.js — [ADR 0011](decisions/0011-frontend-framework.md); Postgres/SQLAlchemy — [ADR 0006](decisions/0006-database-orm-choice.md); Firebase Auth — [ADR 0008](decisions/0008-auth-provider.md)).
 - The Agent/AGI layer is intentionally undesigned until the backend + frontend skeleton is running end-to-end — this includes any future LLM-driven model-selection router (see [product-scope.md §1.1](product-scope.md)).
