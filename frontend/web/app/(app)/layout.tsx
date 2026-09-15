@@ -23,7 +23,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   if (loading || !user) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-bg">
+      <div className="flex min-h-dvh items-center justify-center bg-bg">
         <div className="h-6 w-6 animate-spin rounded-full border-2 border-border-soft border-t-a3" />
       </div>
     );
@@ -32,7 +32,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <ToastProvider>
       <JobEventsProvider>
-        <div className="min-h-screen bg-bg pb-20">
+        {/* `min-h-dvh`, not `min-h-screen` (`100vh`) — on a mobile browser
+         * whose address bar collapses/expands (most of them), `100vh` sizes
+         * against the "large viewport" (as if the bar were always hidden),
+         * so a `fixed bottom-0` descendant (`BottomNav`) can end up pinned
+         * below the actually-visible area while the bar is still showing.
+         * `dvh` tracks the real, current visual viewport instead. */}
+        <div className="min-h-dvh bg-bg pb-20">
           {/* Phone width by default, genuinely wider on desktop (`APP_CONTENT_
            * WIDTH`, `lib/layout.ts`) rather than just centering the same
            * phone-width column with empty space either side — a first pass
