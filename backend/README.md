@@ -78,8 +78,11 @@ Render ([ADR 0023](../docs/decisions/0023-backend-deploy-render-singapore.md)) �
 |---|---|---|
 | `CORS_ALLOW_ORIGINS` | `["http://localhost:3000"]` | `["https://voicica.ai","https://www.voicica.ai"]` — copying the local value here silently blocks every request from the real frontend (`Disallowed CORS origin`, caught live on the first real deploy) |
 | `PUBLIC_BASE_URL` | blank | the service's own real URL (e.g. `https://voicica-api.onrender.com`) — lets Kie's webhook callback reach this backend directly instead of falling back to the ~1-minute poll-sweep every time |
+| `FIREBASE_CREDENTIALS_PATH` | a local relative path (`../secrets/firebase-adminsdk.json`) | **must be left unset/empty** — `core/auth.py`'s `_init_firebase()` checks this *before* `FIREBASE_CREDENTIALS_JSON`, so copying the local path over makes every request 401 with `[Errno 2] No such file or directory`, real error caught live on the web service (`FIREBASE_CREDENTIALS_JSON` still real-and-equal in both places, same as the row below — this one's the opposite trap: a value that's harmless locally becomes actively wrong once copied, not one that's simply different) |
 
-Everything else (`DATABASE_URL`, `REDIS_URL`, `FIREBASE_CREDENTIALS_JSON`, every provider API key, R2 credentials) is the same real value in both places — those aren't secrets that differ by environment, just secrets, so the local `.env` value is the production value too.
+Everything else (`DATABASE_URL`, `REDIS_URL`, `FIREBASE_CREDENTIALS_JSON`, every provider API key, R2 credentials) is the same real value in both places — those aren't secrets that differ by environment, just secrets, so the local `.env` value is the production value too. The Background Worker service needs none of the three rows above at all — it never authenticates an incoming request, so it has no reason to touch Firebase, CORS, or its own public URL.
+
+**Also: create the Background Worker as an actual "Background Worker" service type, not "Web Service."** Render's Web Service type does a port-scan after deploy to confirm something's listening — `python -m app.worker.run_all` never binds a port (it's a pure Redis-polling process), so a Web Service deploy of it times out and fails outright (`No open ports detected` / `Port scan timeout reached`), caught live on the first attempt. Render has no in-place service-type conversion — delete and recreate under the correct type if this happens.
 
 ## What's implemented (this slice)
 
