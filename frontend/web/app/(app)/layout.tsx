@@ -38,7 +38,28 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
          * so a `fixed bottom-0` descendant (`BottomNav`) can end up pinned
          * below the actually-visible area while the bar is still showing.
          * `dvh` tracks the real, current visual viewport instead. */}
-        <div className="min-h-dvh bg-bg pb-20">
+        {/* Safe-area padding on both edges, in one place, so every page under
+         * (app) gets it without each one's own <header>/bottom bar having to
+         * ask for it individually — the same "fix it once at the shared
+         * layout" move `viewport-fit=cover` itself was. `paddingBottom`
+         * mirrors `BottomNav`'s own real height (its `h-16` content plus its
+         * own `env(safe-area-inset-bottom)` padding) so scrolled-to-the-end
+         * content on *any* (app) page clears the nav on a device with a home
+         * indicator, not just on ones with no inset at all — the base `5rem`
+         * (80px) is what this already reserved before real insets existed,
+         * kept as the non-notched-device baseline rather than replaced by
+         * the inset alone. Caught on a real phone: the "Generate speech"-
+         * style fixed action bars a few create pages layer above the nav
+         * (`bottom-16`, calibrated to the nav's un-padded 64px) don't read
+         * this padding at all — they're `fixed`, not part of this flow —
+         * and needed their own matching fix at each call site. */}
+        <div
+          className="min-h-dvh bg-bg"
+          style={{
+            paddingTop: "env(safe-area-inset-top, 0px)",
+            paddingBottom: "calc(5rem + env(safe-area-inset-bottom, 0px))",
+          }}
+        >
           {/* Phone width by default, genuinely wider on desktop (`APP_CONTENT_
            * WIDTH`, `lib/layout.ts`) rather than just centering the same
            * phone-width column with empty space either side — a first pass

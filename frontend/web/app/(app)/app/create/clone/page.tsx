@@ -258,7 +258,19 @@ function GenerateTab({
         onSave={updateAudioSettings}
       />
 
-      <div className="fixed bottom-16 left-0 right-0 px-4 pb-4 pt-3" style={{ background: "linear-gradient(0deg, var(--bg) 65%, transparent)" }}>
+      {/* `bottom` matches `BottomNav`'s own real height (`h-16` + its own
+       * `env(safe-area-inset-bottom)` padding) instead of a bare `bottom-16` —
+       * on a phone with a home indicator, the nav grows taller than 64px, so
+       * a bar pinned at exactly 64px from the true viewport edge sat *behind*
+       * the now-taller nav (real bug, caught on a real phone) instead of
+       * sitting just above it. */}
+      <div
+        className="fixed left-0 right-0 px-4 pb-4 pt-3"
+        style={{
+          bottom: "calc(4rem + env(safe-area-inset-bottom, 0px))",
+          background: "linear-gradient(0deg, var(--bg) 65%, transparent)",
+        }}
+      >
         <button
           onClick={handleGenerate}
           disabled={submitting || !text.trim() || !selectedId}
@@ -400,7 +412,19 @@ function CloneTab({
         </div>
       )}
 
-      <div className="fixed bottom-16 left-0 right-0 px-4 pb-4 pt-3" style={{ background: "linear-gradient(0deg, var(--bg) 65%, transparent)" }}>
+      {/* `bottom` matches `BottomNav`'s own real height (`h-16` + its own
+       * `env(safe-area-inset-bottom)` padding) instead of a bare `bottom-16` —
+       * on a phone with a home indicator, the nav grows taller than 64px, so
+       * a bar pinned at exactly 64px from the true viewport edge sat *behind*
+       * the now-taller nav (real bug, caught on a real phone) instead of
+       * sitting just above it. */}
+      <div
+        className="fixed left-0 right-0 px-4 pb-4 pt-3"
+        style={{
+          bottom: "calc(4rem + env(safe-area-inset-bottom, 0px))",
+          background: "linear-gradient(0deg, var(--bg) 65%, transparent)",
+        }}
+      >
         <button
           onClick={handleClone}
           disabled={!canClone}
