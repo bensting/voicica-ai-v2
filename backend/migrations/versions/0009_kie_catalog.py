@@ -20,6 +20,19 @@ from sqlalchemy.dialects import postgresql
 
 from app.services.kie_catalog import _SEED_CATEGORIES, _SEED_MODELS
 
+# `app/services/kie_catalog.py`'s _SEED_CATEGORIES/_SEED_MODELS are live
+# constants that later ADRs (0016, 0017) kept appending to — 0010/0011
+# already filter down to just the category they're each responsible for
+# seeding; this migration predates that pattern and needs the same fix,
+# or running the full chain against a fresh database (never exercised
+# until now — every real database this ran against had these migrations
+# applied one at a time, as each was written, when the constants were
+# still small) bulk-inserts rows 0010/0011 then try to insert again,
+# failing on a duplicate primary key. Real bug, caught this way.
+_OWN_CATEGORY_IDS = {"text-to-image"}
+_SEED_CATEGORIES = [c for c in _SEED_CATEGORIES if c["id"] in _OWN_CATEGORY_IDS]
+_SEED_MODELS = [m for m in _SEED_MODELS if m["category_id"] in _OWN_CATEGORY_IDS]
+
 revision: str = "0009"
 down_revision: str | None = "0008"
 branch_labels: Sequence[str] | None = None
