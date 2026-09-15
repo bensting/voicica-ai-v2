@@ -40,7 +40,15 @@ def _google_rows(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
         {
             "provider_voice_id": v["name"],
             # Google doesn't give a separate human-readable name — the voice
-            # name itself (e.g. "en-US-Standard-C") is the only label it has.
+            # name itself (e.g. "en-US-Standard-C") is the only label it has,
+            # so display_name just duplicates provider_voice_id (frontend's
+            # friendlyVoiceName() does the actual cosmetic cleanup at render
+            # time, never stored). Missing here entirely until a real
+            # resync against a fresh database — the first one this ran
+            # against — hit `display_name`'s NOT NULL constraint on every
+            # single Google row: real proof this line was needed all along,
+            # not a defensive addition against a hypothetical.
+            "display_name": v["name"],
             # locale is stored exactly as Google returns it (e.g. "cmn-CN",
             # its own code for Mandarin) — this is also what gets sent back
             # to Google as `languageCode` at generation time (providers/
