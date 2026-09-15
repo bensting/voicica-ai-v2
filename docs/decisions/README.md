@@ -57,3 +57,4 @@ What this makes easier, what it makes harder, what it locks in.
 | [0018](0018-realtime-job-updates-sse.md) | Real-time job completion via Redis pub/sub + SSE, replacing inline blocking polls | Accepted |
 | [0019](0019-marketing-site-scope-and-i18n.md) | Marketing site — page scope, content strategy, and i18n registration | Accepted |
 | [0020](0020-admin-folded-into-web.md) | Admin folded into `frontend/web`, not a separate deployment | Accepted |
+| [0021](0021-dedicated-landing-page-and-analytics.md) | Dedicated landing page (`/get`) for all future traffic, GA4 via Firebase Analytics | Accepted |

@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
+import { Analytics } from "@/components/Analytics";
 import { en as content } from "@/content/marketing/en";
 
 /** The public, no-login surface (ADR 0005 §3, ADR 0019) — a plain header +
@@ -18,6 +19,8 @@ export default function MarketingLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex min-h-screen flex-col bg-bg">
+      <Analytics />
+
       <header className="border-b border-border-soft">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-4 sm:px-8">
           <Link href="/" className="flex items-center gap-2.5">
