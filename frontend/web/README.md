@@ -14,6 +14,17 @@ Or in PyCharm/WebStorm: the **"Web"** run configuration (`.run/Web.run.xml`, che
 
 The Firebase web config in `.env.local.example` is already filled in — it's meant to be public (see the file's own comment) — project `ai-voice-labs-473713`, reused from the prior project on purpose (`CLAUDE.md`). `NEXT_PUBLIC_API_BASE_URL` should point at the backend (`http://localhost:8000` for local dev, per `backend/README.md`).
 
+## Deploy
+
+Cloudflare Workers via OpenNext ([ADR 0022](../../docs/decisions/0022-frontend-deploy-cloudflare-workers.md)) — `voicica.ai`/`www.voicica.ai` are already bound (Cloudflare dashboard, not in any checked-in config) to a Worker named `voicica`; `wrangler.jsonc` here uses that same name on purpose, so deploying replaces that Worker's code in place with no DNS/domain change needed.
+
+```bash
+npm run preview   # builds + runs the actual Worker locally (wrangler dev), not just `next dev` — catches Workers-runtime-only issues
+npm run deploy    # builds + deploys to the live voicica.ai
+```
+
+Needs `wrangler login` once per machine (interactive — run it yourself in a real terminal, not through an agent). Build-time values come from the checked-in `.env.production` (every value in it is a public `NEXT_PUBLIC_*` one, no secrets) — `NEXT_PUBLIC_API_BASE_URL` in there is currently an **unconfirmed guess** (`https://api.voicica.ai`), since the backend isn't deployed anywhere public yet; update it and redeploy once it is.
+
 ## What's here
 
 - `lib/firebase.ts` / `lib/auth-context.tsx` — Firebase Auth (email/password + Google, both enabled on the shared Firebase project), exposed via `useAuth()`.

@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Same name as the prior project's Worker on purpose — Workers are
+  // identified by name within an account, and voicica.ai/www.voicica.ai
+  // are already bound to this name as custom domains via the dashboard
+  // (not declared here). Deploying under the same name replaces that
+  // Worker's code in place; the domain bindings carry over untouched,
+  // no DNS/route change needed.
+  "name": "voicica",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-09-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  }
+  // Deliberately no `vars`/`d1_databases`/`queues` here (unlike the prior
+  // project's config) — this app is a pure API consumer of the FastAPI
+  // backend (ADR 0005); it holds no Cloudflare bindings of its own.
+}

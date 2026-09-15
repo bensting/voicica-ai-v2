@@ -30,12 +30,21 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files — *.example is the checked-in template, never the real thing
+# env files — *.example is the checked-in template, never the real thing;
+# .env.production is checked in too (Cloudflare deploy build-time values,
+# ADR 0022) since it holds no secrets, only the same NEXT_PUBLIC_* values
+# .env.local.example already documents as meant to be public.
 .env*
 !.env*.example
+!.env.production
 
 # vercel
 .vercel
+
+# cloudflare (ADR 0022) — build/deploy-generated, never hand-edited
+/.open-next/
+/.wrangler/
+cloudflare-env.d.ts
 
 # typescript
 *.tsbuildinfo
