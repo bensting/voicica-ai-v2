@@ -10,6 +10,7 @@ from app.api import (
     routes_admin,
     routes_catalog,
     routes_config,
+    routes_events,
     routes_gallery,
     routes_jobs,
     routes_kie,
@@ -57,6 +58,7 @@ app.include_router(routes_catalog.router)
 app.include_router(routes_config.router)
 app.include_router(routes_admin.router)
 app.include_router(routes_webhooks.router)
+app.include_router(routes_events.router)
 
 
 @app.get("/health", tags=["meta"])

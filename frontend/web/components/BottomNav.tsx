@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { APP_CONTENT_WIDTH } from "@/lib/layout";
+import { useJobEvents } from "@/lib/job-events";
 import { CreateSheet } from "./CreateSheet";
 
 export function BottomNav() {
@@ -11,6 +12,7 @@ export function BottomNav() {
   const isHome = pathname === "/app";
   const isMe = pathname === "/app/me";
   const [sheetOpen, setSheetOpen] = useState(false);
+  const { pendingCount } = useJobEvents();
 
   return (
     <>
@@ -62,20 +64,30 @@ export function BottomNav() {
 
           <Link
             href="/app/me"
-            className="flex flex-1 h-full flex-col items-center justify-center gap-0.5"
+            className="relative flex flex-1 h-full flex-col items-center justify-center gap-0.5"
           >
-            <svg
-              width="22"
-              height="22"
-              viewBox="0 0 24 24"
-              fill={isMe ? "currentColor" : "none"}
-              stroke="currentColor"
-              strokeWidth="2"
-              className={isMe ? "text-text" : "text-text-3"}
-            >
-              <circle cx="12" cy="8" r="4" />
-              <path d="M20 21a8 8 0 10-16 0" />
-            </svg>
+            <span className="relative">
+              <svg
+                width="22"
+                height="22"
+                viewBox="0 0 24 24"
+                fill={isMe ? "currentColor" : "none"}
+                stroke="currentColor"
+                strokeWidth="2"
+                className={isMe ? "text-text" : "text-text-3"}
+              >
+                <circle cx="12" cy="8" r="4" />
+                <path d="M20 21a8 8 0 10-16 0" />
+              </svg>
+              {/* ADR 0018: how many of the user's own jobs are still
+                  pending/processing — the "check on progress" cue that
+                  doesn't require having caught the toast when it happened. */}
+              {pendingCount > 0 && (
+                <span className="absolute -right-2 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-a3 px-1 text-[9px] font-bold text-white">
+                  {pendingCount > 9 ? "9+" : pendingCount}
+                </span>
+              )}
+            </span>
             <span className={`text-[11px] ${isMe ? "text-text font-medium" : "text-text-3"}`}>
               Me
             </span>

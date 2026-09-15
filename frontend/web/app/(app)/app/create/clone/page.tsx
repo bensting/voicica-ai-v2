@@ -1,12 +1,13 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { api, ApiError, type JobResponse, type VoiceModel } from "@/lib/api";
+import { api, ApiError, type VoiceModel } from "@/lib/api";
 import { AudioRecorder, type RecordedAudio } from "@/components/AudioRecorder";
 import { AudioSettingsSheet } from "@/components/AudioSettingsSheet";
 import { useAudioSettings } from "@/lib/audio-settings";
+import { useJobEvents } from "@/lib/job-events";
+import { useToast } from "@/components/Toast";
 
 const MAX_CHARS = 500;
 type TabId = "generate" | "clone";
@@ -24,6 +25,7 @@ export default function VoiceClonePage() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabId>("generate");
   const [voiceModels, setVoiceModels] = useState<VoiceModel[] | null>(null);
+  const { lastEvent } = useJobEvents();
 
   async function refreshVoiceModels() {
     try {
@@ -36,6 +38,22 @@ export default function VoiceClonePage() {
   useEffect(() => {
     api.listVoiceModels().then(setVoiceModels).catch(() => setVoiceModels([]));
   }, []);
+
+  // ADR 0018: training itself is now submit-and-move-on too (fast-mode
+  // training being near-instant, verified in `backend/README.md`, was the
+  // exception carving it out of this pattern until it caused a real
+  // inconsistency — the rest of the app moved on, this page hadn't). The
+  // payoff for listening here specifically: a newly-trained voice shows up
+  // in the picker below without needing to leave this page at all.
+  // `.then(setVoiceModels)` directly (not the shared `refreshVoiceModels`
+  // helper) — matches `VoiceSheet.tsx`'s own resolution of this same
+  // set-state-in-effect lint rule: the setter needs to be reached through
+  // an inline `.then()`, not an indirection the linter can't see through.
+  useEffect(() => {
+    if (lastEvent?.capability === "voice_model_training" && lastEvent.status === "succeeded") {
+      api.listVoiceModels().then(setVoiceModels).catch(() => {});
+    }
+  }, [lastEvent]);
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -89,34 +107,30 @@ function GenerateTab({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [job, setJob] = useState<JobResponse | null>(null);
   const { settings: audioSettings, updateSettings: updateAudioSettings } = useAudioSettings();
   const [audioSheetOpen, setAudioSheetOpen] = useState(false);
   const [shareToExplore, setShareToExplore] = useState(false);
+  const { registerPendingJob } = useJobEvents();
+  const { show } = useToast();
 
+  // ADR 0018: submit, then get out of the way — see create/tts/page.tsx's
+  // identical comment; this is the same flow, just with a cloned voice.
   async function handleGenerate() {
     if (!text.trim() || !selectedId) return;
     setSubmitting(true);
     setError(null);
     try {
-      const submitted = await api.submitTts(text.trim(), { voiceModelId: selectedId }, {
+      await api.submitTts(text.trim(), { voiceModelId: selectedId }, {
         ...audioSettings,
         visibility: shareToExplore ? "public" : "private",
       });
-      // ADR 0014: poll instead of assuming submitTts()'s own response is
-      // already terminal — see create/tts/page.tsx's identical comment.
-      const result = await api.pollJob(submitted.id);
-      setJob(result);
-      if (result.status === "failed") setError(result.error ?? "Generation failed.");
+      registerPendingJob();
+      show("Submitted — we'll let you know when it's ready.", { tone: "success", href: "/app/me" });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Something went wrong.");
     } finally {
       setSubmitting(false);
     }
-  }
-
-  if (job && job.status === "succeeded") {
-    return <ResultView job={job} onCreateAnother={() => { setJob(null); setText(""); }} />;
   }
 
   return (
@@ -253,7 +267,7 @@ function GenerateTab({
           {submitting ? (
             <>
               <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#120a1c]/30 border-t-[#120a1c]" />
-              Generating…
+              Submitting…
             </>
           ) : (
             "Generate speech"
@@ -276,30 +290,29 @@ function CloneTab({
   const [referenceText, setReferenceText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const { registerPendingJob } = useJobEvents();
+  const { show } = useToast();
 
   const canClone = audio !== null && name.trim().length > 0 && !submitting;
 
+  // ADR 0018: submit, then get out of the way, same as everything else —
+  // training itself is usually near-instant (fast-mode, `backend/README.md`),
+  // but waiting here anyway was the one capability left out of this
+  // pattern, which is exactly the kind of inconsistency it was meant to
+  // remove. The page-level `lastEvent` effect above refreshes this list
+  // once training actually finishes, whether that's 2 seconds or 20.
   async function handleClone() {
     if (!audio || !name.trim()) return;
     setSubmitting(true);
     setError(null);
-    setSuccess(false);
     try {
-      const submitted = await api.trainVoiceModel(name.trim(), audio.blob, audio.fileName, referenceText.trim() || undefined);
-      // ADR 0014: training runs in a background worker too now — poll
-      // instead of assuming the submit response is already terminal.
-      const job = await api.pollJob(submitted.id);
-      if (job.status === "failed") {
-        setError(job.error ?? "Cloning failed.");
-      } else {
-        setSuccess(true);
-        setAudio(null);
-        setName("");
-        setReferenceText("");
-        await onCloned();
-      }
+      await api.trainVoiceModel(name.trim(), audio.blob, audio.fileName, referenceText.trim() || undefined);
+      registerPendingJob();
+      show("Submitted — your cloned voice will show up here once it's ready.", { tone: "success" });
+      setAudio(null);
+      setName("");
+      setReferenceText("");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Something went wrong.");
     } finally {
@@ -323,11 +336,6 @@ function CloneTab({
     <div className="flex flex-col gap-3.5 pt-1">
       {error && (
         <div className="rounded-xl border border-danger/25 bg-danger/10 px-3.5 py-2.5 text-sm text-danger">{error}</div>
-      )}
-      {success && (
-        <div className="rounded-xl border border-a3/25 bg-a3/10 px-3.5 py-2.5 text-sm text-a3">
-          Voice cloned — switch to the Generate tab to use it.
-        </div>
       )}
 
       <AudioRecorder value={audio} onChange={setAudio} />
@@ -401,7 +409,7 @@ function CloneTab({
           {submitting ? (
             <>
               <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#120a1c]/30 border-t-[#120a1c]" />
-              Cloning…
+              Submitting…
             </>
           ) : (
             "Create clone"
@@ -412,98 +420,7 @@ function CloneTab({
   );
 }
 
-function ResultView({ job, onCreateAnother }: { job: JobResponse; onCreateAnother: () => void }) {
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [visibility, setVisibility] = useState(job.visibility);
-  const [toggling, setToggling] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!job.output?.asset_url) return;
-    let cancelled = false;
-    let objectUrl: string | null = null;
-    api
-      .assetBlobUrl(job.output.asset_url)
-      .then((url) => {
-        if (cancelled) {
-          URL.revokeObjectURL(url);
-          return;
-        }
-        objectUrl = url;
-        setAudioUrl(url);
-      })
-      .catch(() => setLoadError("Couldn't load the audio."));
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [job.output?.asset_url]);
-
-  async function togglePublic() {
-    setToggling(true);
-    try {
-      const updated = await api.setVisibility(job.id, visibility === "public" ? "private" : "public");
-      setVisibility(updated.visibility);
-    } catch {
-      // best-effort — leave visibility as-is on failure
-    } finally {
-      setToggling(false);
-    }
-  }
-
-  return (
-    <div className="pt-2">
-      <div className="flex flex-col items-center pb-1 pt-2.5 text-center">
-        <div className="mb-3.5 flex h-14 w-14 items-center justify-center rounded-full border border-a3/35 bg-a3/10 text-a3">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
-            <polyline points="20,6 9,17 4,12" />
-          </svg>
-        </div>
-        <div className="font-display font-bold text-[19px]">Your speech is ready</div>
-        <div className="mt-1 text-[12.5px] text-text-2">{job.actual_cost} credits charged</div>
-      </div>
-
-      <div className="mt-5 rounded-[20px] border border-border-soft bg-surface p-4.5">
-        {loadError && <p className="text-sm text-danger">{loadError}</p>}
-        {!loadError && (
-          <audio controls src={audioUrl ?? undefined} className="w-full">
-            Your browser doesn&apos;t support audio playback.
-          </audio>
-        )}
-      </div>
-
-      <button
-        onClick={togglePublic}
-        disabled={toggling}
-        className="mt-3.5 flex w-full items-center gap-3 rounded-2xl border border-border-soft bg-surface px-4 py-3.5 text-left disabled:opacity-60"
-      >
-        <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[10px] bg-a3/15 text-a3">
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-            <circle cx="12" cy="12" r="9" />
-            <line x1="3" y1="12" x2="21" y2="12" />
-            <path d="M12 3a15 15 0 010 18M12 3a15 15 0 000 18" />
-          </svg>
-        </div>
-        <div className="flex-1">
-          <div className="text-[13.5px] font-semibold">Share to Explore</div>
-          <div className="mt-px text-[11.5px] text-text-2">Visible to everyone, no login required to view</div>
-        </div>
-        <div className={`h-[26px] w-11 flex-shrink-0 rounded-full transition-colors ${visibility === "public" ? "grad-bg" : "bg-surface-2 border border-border"}`}>
-          <div
-            className="h-[21px] w-[21px] rounded-full bg-white shadow transition-transform"
-            style={{ transform: visibility === "public" ? "translate(20px, 2.5px)" : "translate(2.5px, 2.5px)" }}
-          />
-        </div>
-      </button>
-
-      <div className="pb-24 pt-6">
-        <button onClick={onCreateAnother} className="grad-bg w-full rounded-2xl py-3.5 text-sm font-semibold text-[#120a1c]">
-          Create another
-        </button>
-        <Link href="/app" className="mt-3 block text-center text-[13px] text-text-2">
-          Back to Explore
-        </Link>
-      </div>
-    </div>
-  );
-}
+// The old inline "Your speech is ready" result screen (audio player +
+// public/private toggle) is gone from here — ADR 0018 means this page
+// never waits for a result to show one. That same pattern now lives on
+// `/app/me`'s own job card, the one place results are actually viewed.

@@ -54,3 +54,4 @@ What this makes easier, what it makes harder, what it locks in.
 | [0015](0015-kie-model-catalog.md) | Kie model catalog — hand-curated DB tables, generic wire protocol | Accepted |
 | [0016](0016-kie-image-to-image-uploads.md) | Kie image-to-image — short-lived public R2 uploads for reference images | Accepted |
 | [0017](0017-kie-video-and-catalog-splitting.md) | Kie video category, per-unit pricing, and catalog rows outnumbering real Kie models | Accepted |
+| [0018](0018-realtime-job-updates-sse.md) | Real-time job completion via Redis pub/sub + SSE, replacing inline blocking polls | Accepted |

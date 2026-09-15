@@ -52,6 +52,7 @@ async def sweep_stuck_jobs(ctx: dict[str, Any]) -> int:
             job.completed_at = datetime.now(UTC)
             if job.provider == "kie":
                 await jobs.cleanup_kie_uploads(job)  # ADR 0016
+            await jobs.publish_job_event(job)  # ADR 0018 — this bypasses _complete_failure
             swept += 1
         if swept:
             await db.commit()

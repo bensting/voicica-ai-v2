@@ -17,6 +17,7 @@ concrete problems (DB-connection-pool exhaustion; Fish Audio's real
 5-concurrent-request limit) that made the old inline shape not scale.
 """
 
+import json
 import logging
 import re
 import uuid
@@ -38,6 +39,36 @@ from app.services import kie_catalog as kie_catalog_service
 from app.services import voice_catalog as voice_catalog_service
 
 logger = logging.getLogger(__name__)
+
+
+async def publish_job_event(job: Job) -> None:
+    """ADR 0018: the real-time half of "submit, then find out when it's
+    done without polling" — called at every point a job reaches a terminal
+    state (`_complete_success`, `_complete_kie_success`, `_complete_failure`,
+    plus the two places that write a terminal state inline rather than
+    through one of those: `execute_voice_model_training_job`'s own success
+    path, and `worker/cron.py sweep_stuck_jobs`'s timeout path).
+
+    Publishes to the owning user's own Redis pub/sub channel — `GET /events`
+    (`api/routes_events.py`) subscribes per-connected-user and forwards each
+    message to that one browser tab as an SSE event. Reuses `queue_service`'s
+    existing Redis pool (already a dependency for arq itself; this adds no
+    new external service) via a plain `PUBLISH`, not an arq job — there's
+    nothing here for a worker to pick up later, just a fire-and-forget
+    signal to whoever happens to be listening right now.
+
+    Best-effort and silent on failure: a dropped pub/sub message only costs
+    the user a slightly-stale "processing" chip until they next reload
+    (`GET /jobs` is always the real source of truth) — it must never affect
+    the job's own already-committed outcome, so this never raises."""
+    try:
+        pool = await queue_service.get_pool()
+        await pool.publish(
+            f"job-events:{job.user_id}",
+            json.dumps({"job_id": str(job.id), "status": job.status, "capability": job.capability}),
+        )
+    except Exception:
+        logger.warning("Failed to publish job-event for job %s", job.id, exc_info=True)
 
 
 class EnqueueError(Exception):
@@ -501,6 +532,7 @@ async def execute_voice_model_training_job(
         job.completed_at = datetime.now(UTC)
         job.voice_model_id = voice_model.id
         job.output = {"voice_model_id": str(voice_model.id)}
+        await publish_job_event(job)
     elif job_ref.status == "failed":
         if job_try < MAX_PROVIDER_TRIES and _is_transient_error(job_ref.error):
             await db.commit()
@@ -689,6 +721,7 @@ async def _complete_kie_success(
     job.provider_state = job_status.provider_state
     asset_url = f"/jobs/{job.id}/asset" if asset_fields else None
     job.output = {"asset_url": asset_url}
+    await publish_job_event(job)
 
 
 async def _complete_success(
@@ -727,6 +760,7 @@ async def _complete_success(
     # URLs aren't used here.
     asset_url = f"/jobs/{job.id}/asset" if asset_fields else None
     job.output = {"asset_url": asset_url}
+    await publish_job_event(job)
 
 
 async def _complete_failure(
@@ -736,6 +770,7 @@ async def _complete_failure(
     job.status = "failed"
     job.error = error
     job.completed_at = datetime.now(UTC)
+    await publish_job_event(job)
 
 
 async def get_job(db: AsyncSession, job_id: uuid.UUID, *, user_id: str) -> Job | None:
