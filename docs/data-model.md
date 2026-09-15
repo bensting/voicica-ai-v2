@@ -68,7 +68,7 @@ erDiagram
         string id PK
         string user_id FK
         string title "user-given name, from POST /voice-models — see this table's note below"
-        string provider "fish_audio | azure | google, per provider support"
+        string provider "fish_audio only for now — Azure/Google's own equivalent is unconfirmed, ADR 0009's open item"
         string provider_model_id
         string state "training | ready | failed"
         string created_from_job_id FK "the voice_model_training job that made this"
@@ -153,5 +153,5 @@ The rule for a *new* value going forward: engineering-curated and structurally c
 
 ## Open items
 
-- **Indexes** aren't specified here yet — add them alongside the first real migration (obvious candidates: `jobs.user_id`, `jobs.status`, `credit_holds.user_id` + `status`).
+- **Indexes**: this section used to say they "aren't specified yet" — stale since `0001_initial_schema.py`, the very first migration, already added them: `users.email` (unique), `jobs.user_id`, a composite `ix_jobs_user_status` (`user_id`, `status`), `jobs.provider_job_id` (Kie's webhook/poll-sweep lookup), `credit_transactions.wallet_id`, `credit_holds.user_id`, `voice_models.user_id`, `kie_models.category_id`, and a composite `ix_voice_catalog_provider_locale` (`provider`, `locale`). Genuinely still missing: a composite on `credit_holds` (`user_id`, `status`) — today's available-balance query (`balance - sum(active holds)`) only has the single-column `user_id` index to use, not yet a real problem at this scale.
 - **Soft-delete / retention for `jobs`/`credit_transactions` themselves** (as opposed to the R2 assets they reference) isn't decided — out of scope until there's an actual data-retention policy question to answer.
