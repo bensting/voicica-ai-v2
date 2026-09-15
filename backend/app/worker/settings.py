@@ -17,7 +17,7 @@ from typing import ClassVar
 
 from arq.worker import func
 
-from app.core.queue import QUEUE_NAMES, redis_settings
+from app.core.queue import QUEUE_NAMES, WORKER_POLL_DELAY_SECONDS, redis_settings
 from app.services.jobs import MAX_PROVIDER_TRIES
 from app.worker.tasks import run_kie_submit_job, run_tts_job, run_voice_model_training_job
 
@@ -59,6 +59,7 @@ class FishAudioWorker:
     redis_settings = redis_settings()
     max_jobs = 4
     job_timeout = _JOB_TIMEOUT_SECONDS
+    poll_delay = WORKER_POLL_DELAY_SECONDS
 
 
 class AzureWorker:
@@ -71,6 +72,7 @@ class AzureWorker:
     redis_settings = redis_settings()
     max_jobs = 20
     job_timeout = _JOB_TIMEOUT_SECONDS
+    poll_delay = WORKER_POLL_DELAY_SECONDS
 
 
 class GoogleWorker:
@@ -81,6 +83,7 @@ class GoogleWorker:
     redis_settings = redis_settings()
     max_jobs = 20
     job_timeout = _JOB_TIMEOUT_SECONDS
+    poll_delay = WORKER_POLL_DELAY_SECONDS
 
 
 class KieSubmitWorker:
@@ -96,3 +99,4 @@ class KieSubmitWorker:
     redis_settings = redis_settings()
     max_jobs = 10
     job_timeout = _JOB_TIMEOUT_SECONDS
+    poll_delay = WORKER_POLL_DELAY_SECONDS

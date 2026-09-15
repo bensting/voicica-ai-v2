@@ -13,7 +13,7 @@ from arq import cron
 from sqlalchemy import select
 
 from app.core.db import async_session_factory
-from app.core.queue import redis_settings
+from app.core.queue import WORKER_POLL_DELAY_SECONDS, redis_settings
 from app.models.models import CreditHold, Job
 from app.providers.registry import get_provider_by_name
 from app.services import credits, jobs
@@ -107,3 +107,11 @@ class CronWorker:
     ]
     queue_name = "queue:cron"
     redis_settings = redis_settings()
+    # Same rationale as the provider workers (app/core/queue.py) — this
+    # process has no queue to react to quickly, just a clock to watch, so
+    # there's even less reason for it to poll at arq's 0.5s default. arq
+    # tracks each cron job's own next-due minute internally and fires it
+    # exactly once when that minute arrives regardless of poll_delay, as
+    # long as poll_delay stays well under 60s — 5s doesn't cost this any
+    # scheduling accuracy, only cuts its idle Redis chatter by ~10x.
+    poll_delay = WORKER_POLL_DELAY_SECONDS

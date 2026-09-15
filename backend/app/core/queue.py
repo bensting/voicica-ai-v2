@@ -29,6 +29,21 @@ QUEUE_NAMES: dict[str, str] = {
     "kie": "queue:kie-submit",
 }
 
+# arq's default `poll_delay` (0.5s) means every one of `worker/settings.py`'s
+# four `WorkerSettings` classes plus `worker/cron.py`'s `CronWorker` — five
+# independent polling loops, by design (ADR 0014: one per provider so one's
+# slowness can't delay another's) — hits Redis roughly twice a second each,
+# whether or not there's a real job waiting. That cost scales with how long
+# the worker process is *running*, not with how many jobs it actually does:
+# a real Upstash account here burned through half its 500K/month free
+# command budget from local dev alone, with only a handful of real jobs
+# submitted the whole time. 5s cuts each loop's poll rate — and therefore
+# its Redis command volume — to roughly a tenth of the 0.5s default, at the
+# cost of up to ~5s of extra pickup latency per job. Accepted: every create
+# page is fire-and-forget with an SSE push on completion (ADR 0018), so
+# nobody is watching a spinner for those extra seconds either way.
+WORKER_POLL_DELAY_SECONDS = 5.0
+
 
 def redis_settings() -> RedisSettings:
     """Built fresh from the current settings each call (cheap — just parses
