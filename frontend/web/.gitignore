@@ -30,13 +30,14 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files — *.example is the checked-in template, never the real thing;
-# .env.production is checked in too (Cloudflare deploy build-time values,
-# ADR 0022) since it holds no secrets, only the same NEXT_PUBLIC_* values
-# .env.local.example already documents as meant to be public.
+# env files — *.example is the only checked-in one, a placeholder-only
+# template (matching backend's own convention). Every real .env* file,
+# including .env.production.local (Cloudflare deploy build-time values,
+# ADR 0022), stays local-only — no blanket "these values aren't secret so
+# it's fine to commit" exceptions, that judgment call isn't worth making
+# per-file when just never committing .env* avoids it entirely.
 .env*
 !.env*.example
-!.env.production
 
 # vercel
 .vercel

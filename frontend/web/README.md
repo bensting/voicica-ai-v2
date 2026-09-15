@@ -23,7 +23,16 @@ npm run preview   # builds + runs the actual Worker locally (wrangler dev), not 
 npm run deploy    # builds + deploys to the live voicica.ai
 ```
 
-Needs `wrangler login` once per machine (interactive — run it yourself in a real terminal, not through an agent). Build-time values come from the checked-in `.env.production` (every value in it is a public `NEXT_PUBLIC_*` one, no secrets) — `NEXT_PUBLIC_API_BASE_URL` in there is currently an **unconfirmed guess** (`https://api.voicica.ai`), since the backend isn't deployed anywhere public yet; update it and redeploy once it is.
+Needs `wrangler login` once per machine (interactive — run it yourself in a real terminal, not through an agent). Build-time values come from `.env.production.local` — **not committed** (ADR 0022, revisited after a real GitHub secret-scanner alert on the unrelated `.env.local.example` mistake prompted a blanket "no `.env*` ever committed" rule instead of judging each value's sensitivity file-by-file) — recreate it by hand on a fresh machine before `npm run deploy` works:
+
+```bash
+# frontend/web/.env.production.local — same shape as .env.local.example,
+# real values (all public — see that file's comment), plus:
+NEXT_PUBLIC_SITE_URL=https://voicica.ai
+NEXT_PUBLIC_API_BASE_URL=https://voicica-api.onrender.com   # ADR 0023 — the real Render backend
+```
+
+`NEXT_PUBLIC_API_BASE_URL` there is the backend's real Render URL (ADR 0023) — but it isn't actually reachable from the deployed frontend until that service's own `CORS_ALLOW_ORIGINS` allows `https://voicica.ai`, so redeploy this frontend only after confirming that's set.
 
 ## What's here
 
