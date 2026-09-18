@@ -77,10 +77,16 @@ async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)) -
 
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
+        # This version of the stripe SDK's `construct_event` returns a real
+        # `stripe.checkout.Session` object, not a plain dict — it supports
+        # `session["key"]` (subscript access) but *not* `.get(...)` (a real
+        # dict method), which raises its own explicit AttributeError rather
+        # than silently returning None. Caught live on the first real
+        # webhook delivery, not assumed correct from reading the SDK docs.
         purchase = await billing.complete_purchase(
             db,
             checkout_session_id=session["id"],
-            payment_intent_id=session.get("payment_intent"),
+            payment_intent_id=session["payment_intent"],
         )
         if purchase is None:
             # A session id Stripe knows about but we don't (e.g. a stray
