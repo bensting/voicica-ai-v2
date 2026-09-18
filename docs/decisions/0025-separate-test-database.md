@@ -1,0 +1,35 @@
+# ADR 0025: Local Dev/Testing Gets Its Own Database, Reversing ADR 0023
+
+- Status: Accepted
+- Date: 2026-09-18
+
+## Context
+
+[ADR 0023](0023-backend-deploy-render-singapore.md) deliberately chose **one shared database for everything** — local dev, testing, and production all pointed at the same Neon Singapore project — on the user's own explicit call: *"数据不要紧，这个是个人项目，后续就是一套不要分，否则我们维护不过来"* (data doesn't matter, this is a personal project, going forward it's one set, don't split, or a single maintainer can't keep up). At the time, that was the right call — there was no real user data yet, and standing up a second database to keep in sync felt like pure overhead for a pre-launch product.
+
+**What changed**: [ADR 0024](0024-credit-purchases-stripe-checkout.md)'s real end-to-end verification — creating actual `credit_purchases` rows, moving actual wallet balances, deliberately testing failure/idempotency paths — happened directly against the shared production database, because there was no other database to use. That's a materially different risk than earlier local testing (submitting a TTS job, browsing the catalog): payment and credit-ledger operations are exactly the kind of thing where "it was just a test, on the test account" stops being a fully comfortable answer, especially with real money (even test-mode Stripe money) and a real credit ledger involved. The user surfaced this directly: *"所以我本地测试连接的也是生产库对吗"* (so my local testing is also hitting the production DB, right?), and decided it was time to reopen ADR 0023's call rather than keep accepting the risk.
+
+## Decision
+
+**Reversed**: local development and testing now use a **dedicated Neon database**, separate from the one Render's production services use — same region (`ap-southeast-1`, Singapore) as production, for the same latency reasoning ADR 0023 already established, just a different project. The production connection string is no longer in `backend/.env` at all; it moved to a new `backend/.env.production` — a **personal reference file only**, never loaded by anything (`core/config.py` hard-codes `env_file=".env"`; Render reads its own dashboard-configured environment variables, not a file in this repo) — so the real production values are written down somewhere findable instead of living only in Render's UI.
+
+**Re-derived, not manually copied, the reset cost turned out lower than ADR 0023 assumed**: standing up the new database was `alembic upgrade head` (all schema *and* most seed data — `app_settings`, `kie_categories`/`kie_models`, `capability_menu` — are captured in migrations, so they came back automatically) plus one manual re-run of `python -m app.scheduled.sync_catalog` (the one real thing not in a migration — 779 Azure + 2066 Google voices, matching production's real counts exactly). ADR 0023's original worry — "two databases to keep in sync" — turns out to mostly not apply going forward either: any *future* migration still only needs to be written once and gets applied to both databases the normal way (`alembic upgrade head` against whichever one a given process points at), the same as it always would for any two-environment setup. The only genuinely manual, easy-to-forget step is re-running the voice-catalog sync on the rare occasion it needs to happen twice.
+
+**Verified for real, not just plumbed**: pointed `.env` at the new database, ran the full migration chain fresh (all 12 migrations, zero errors — the `0009` seeding bug ADR 0023 already found and fixed stayed fixed), ran the catalog sync (real counts matching production), then hit `GET /me` with the same test account's real Firebase token — it bootstrapped a **brand-new** row with the current signup bonus (50 credits), not the 2,495-credit balance that same account has in production. That's the actual proof this is genuinely isolated, not just pointed at a different-looking connection string that happens to alias the same data.
+
+**`.gitignore` hardened at the same time**: the root `.env`/`.env.local` exact-filename list became a blanket `.env*` (with `!.env*.example` as the one exception) — this is the second time a new real `.env` variant (`.env.production`, this time) would otherwise have needed a developer to remember to add it by name, after `frontend/web` already got burned twice the same way (`.env.local.example`, then `.env.production`, ADR 0022). A wildcard rule removes the "did I remember to list this one" failure mode entirely, at zero cost — an example file overriding it back on is one line.
+
+## Alternatives considered
+
+- **Keep one shared database, just be more careful with local testing.** Rejected — the discipline required ("remember to clean up after every local test") doesn't scale, and the whole point of a test environment is not needing that discipline in the first place. Real, tangible risk once real user data exists.
+- **A local Postgres container instead of a second Neon project.** Not chosen for this pass — Neon's free tier makes a second hosted instance essentially free for this scale, and staying on Neon means the exact same connection conventions (`DATABASE_SSL_REQUIRE`, pooler URL shape) apply without a parallel "local Postgres has different quirks" path to maintain. Worth revisiting if Neon's free tier ever becomes a real constraint.
+- **Naming the production reference file something other than `.env.production`.** Considered — Next.js's own `.env.production` convention (used by `frontend/web`, ADR 0022) means something different there (a real, loaded build-time config file) than it does here (an inert backend reference file nothing loads). Kept the name anyway since this is backend-only and the file's own header comment says explicitly what it is and isn't; revisit if the naming genuinely confuses a future reader.
+
+## Consequences
+
+**Positive:** local/test work — including anything touching money or the credit ledger going forward — no longer risks production data. The re-seeding process (migrations + one sync command) is now a proven, repeatable few minutes, not a hypothetical.
+
+**Negative / open items:**
+- **Two databases now need migrations applied separately** — `alembic upgrade head` has to be run against each one a change should reach (test now, production whenever that deploy happens). Not automated; a real manual step to remember, same as it would be for any two-environment setup.
+- **The test account's `role` didn't carry over** (it was manually promoted to `staff` in production for ADR 0020's admin-panel testing) — the fresh test database's copy of that account is back to plain `user`. Re-promote by hand if admin-panel testing is needed against the test database again.
+- **`backend/.env.production` needs manual upkeep** — it's a snapshot, not a live mirror; if a real production value changes in Render's dashboard without someone remembering to also update this file, it goes stale. Accepted for now (a wrong *reference* file is a much smaller risk than a wrong *loaded* one), but worth a periodic "does this still match Render" sanity check.

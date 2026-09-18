@@ -4,8 +4,11 @@ __pycache__/
 *.pyc
 .venv/
 venv/
-.env
-.env.local
+# Blanket rule, not a per-file list — the frontend got burned twice by
+# listing exact filenames here (.env.local.example, then .env.production)
+# and forgetting to add the next real .env* file before committing it.
+.env*
+!.env*.example
 .DS_Store
 .ruff_cache/
 *.egg-info/
