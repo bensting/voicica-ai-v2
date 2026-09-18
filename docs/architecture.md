@@ -227,7 +227,8 @@ backend/
 │   │   ├── menu.py                 # the capability menu, stored in app_settings (ADR 0012)
 │   │   ├── app_settings.py          # simple tunable scalars (ADR 0012)
 │   │   ├── gallery.py                # the public gallery query (ADR 0010)
-│   │   └── users.py                   # first-login bootstrap (wallet + signup bonus)
+│   │   ├── users.py                   # first-login bootstrap (wallet + signup bonus)
+│   │   └── billing.py                  # Stripe Checkout session creation + idempotent webhook completion (ADR 0024)
 │   ├── scheduled/              # periodic, non-request-triggered work run by hand today (ADR 0007)
 │   │   └── sync_catalog.py       # pulls Azure/Google's real voice list into voice_catalog — `python -m app.scheduled.sync_catalog`
 │   ├── worker/                # arq task definitions + WorkerSettings, one process per queue (ADR 0014/0015)
@@ -238,7 +239,8 @@ backend/
 │   ├── api/                  # FastAPI routes — input validation, calls services/
 │   │   ├── routes_tts.py, routes_voice_models.py     # synchronous-provider capabilities
 │   │   ├── routes_kie.py                              # generic /generate/kie + /kie/categories, /kie/models (ADR 0015)
-│   │   ├── routes_webhooks.py                          # POST /webhooks/kie — Kie's callBackUrl target
+│   │   ├── routes_webhooks.py                          # POST /webhooks/kie + POST /webhooks/stripe — third-party callback targets
+│   │   ├── routes_billing.py                            # GET /billing/packages, POST /billing/checkout (ADR 0024)
 │   │   ├── routes_jobs.py, routes_gallery.py, routes_catalog.py, routes_config.py, routes_me.py, routes_admin.py
 │   │   └── schemas.py, errors.py
 │   ├── models/                # Jobs, credit ledger, asset, and catalog tables — one models.py (see data-model.md)

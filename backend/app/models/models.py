@@ -256,6 +256,36 @@ class VoiceModel(Base):
     created_at: Mapped[datetime] = mapped_column(_TZ, server_default=func.now())
 
 
+class CreditPurchase(Base):
+    """One row per attempted Stripe Checkout Session for a credit pack
+    (ADR 0024) — created `pending` at session-creation time, before the user
+    has paid anything, so a webhook that arrives has a real row to find and
+    lock. `credits`/`amount_usd_cents` are a snapshot of the package's price
+    *at purchase time* — `app_settings.credit_packages` (ADR 0012) can
+    change later without rewriting history.
+
+    `stripe_checkout_session_id` is the idempotency key: Stripe's webhook
+    delivery is at-least-once (the same lesson ADR 0014 already learned the
+    hard way with arq), so `services/billing.py complete_purchase()` locks
+    this row (`SELECT ... FOR UPDATE`, same idiom as `finalize_kie_job`)
+    and only tops up credits if `status` is still `pending` — a redelivered
+    webhook for an already-completed purchase safely no-ops instead of
+    double-crediting the wallet."""
+
+    __tablename__ = "credit_purchases"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    package_key: Mapped[str] = mapped_column(String(32))  # app_settings.credit_packages[].key
+    credits: Mapped[int] = mapped_column(Integer)
+    amount_usd_cents: Mapped[int] = mapped_column(Integer)
+    stripe_checkout_session_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    stripe_payment_intent_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|completed|failed
+    created_at: Mapped[datetime] = mapped_column(_TZ, server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(_TZ, nullable=True)
+
+
 class AppSetting(Base):
     """Generic key-value store for tunable scalars (ADR 0012) — e.g.
     signup_bonus_credits, tts_credits_per_10_chars. Read by any service that

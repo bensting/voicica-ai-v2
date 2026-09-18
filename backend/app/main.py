@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
     routes_admin,
+    routes_billing,
     routes_catalog,
     routes_config,
     routes_events,
@@ -57,6 +58,7 @@ app.include_router(routes_gallery.router)
 app.include_router(routes_catalog.router)
 app.include_router(routes_config.router)
 app.include_router(routes_admin.router)
+app.include_router(routes_billing.router)
 app.include_router(routes_webhooks.router)
 app.include_router(routes_events.router)
 

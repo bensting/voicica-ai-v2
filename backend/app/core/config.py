@@ -65,6 +65,25 @@ class Settings(BaseSettings):
     # CORS — frontend/web's origin(s) during local dev
     cors_allow_origins: list[str] = ["http://localhost:3000"]
 
+    # The one frontend origin to redirect a real browser back to after it
+    # leaves this backend's own domain — Stripe Checkout's success/cancel
+    # URLs (ADR 0024) today, the only such case so far. Deliberately a
+    # separate setting from `cors_allow_origins` (that's an *allow-list*,
+    # which can hold more than one real origin — www vs. apex, ADR 0023 —
+    # so `[0]` isn't a safe stand-in for "the" frontend URL) and from
+    # `public_base_url` (this backend's own URL, not the frontend's).
+    frontend_base_url: str = "http://localhost:3000"
+
+    # Stripe (ADR 0024) — one-time credit-pack purchases via a hosted
+    # Checkout Session. `stripe_webhook_secret` is per-endpoint (Stripe
+    # generates a distinct one for the CLI/local listener vs. each real
+    # webhook endpoint registered in the Dashboard) — copying the wrong one
+    # across environments makes every webhook 400 on signature verification,
+    # the same class of "differs by environment" mistake `CORS_ALLOW_ORIGINS`
+    # and `PUBLIC_BASE_URL` already are (backend/README.md's Deploy table).
+    stripe_secret_key: str | None = None
+    stripe_webhook_secret: str | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:

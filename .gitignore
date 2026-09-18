@@ -13,3 +13,6 @@ venv/
 .idea/
 /secrets/*
 !/secrets/README.md
+
+# Personal interview prep — not project content, never committed
+/interview/

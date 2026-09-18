@@ -18,6 +18,7 @@ erDiagram
     users ||--o{ jobs : submits
     users ||--o{ credit_holds : holds
     users ||--o{ voice_models : owns
+    users ||--o{ credit_purchases : buys
     jobs ||--o| credit_holds : "reserved via"
     jobs ||--o| assets : "mirrors to"
     jobs }o--o| voice_models : "optionally uses (TTS) or creates (training)"
@@ -126,6 +127,19 @@ erDiagram
         timestamp created_at
     }
     kie_models }o--|| kie_categories : "belongs to"
+
+    credit_purchases {
+        string id PK
+        string user_id FK
+        string package_key "app_settings.credit_packages[].key at purchase time"
+        int credits "snapshot — later price changes don't rewrite history"
+        int amount_usd_cents "snapshot"
+        string stripe_checkout_session_id "unique — the idempotency key"
+        string stripe_payment_intent_id "nullable"
+        string status "pending | completed | failed"
+        timestamp created_at
+        timestamp completed_at "nullable"
+    }
 ```
 
 `voice_catalog` isn't in the entity-relationship graph above (it has no FK to `users`/`jobs`) — it's reference data, written by `scheduled/sync_catalog.py` ([ADR 0007](decisions/0007-scheduled-tasks-module.md)) and read by the voice picker. A `jobs.input` referencing a voice stores `provider_voice_id`, not a foreign key into this table (the catalog can be resynced/pruned independently of job history). `kie_categories`/`kie_models` are the same shape of omission, for the same reason — a `jobs.model_id` stores Kie's own string directly, not a foreign key, so the catalog can be edited/pruned without touching job history.
@@ -141,13 +155,14 @@ erDiagram
 - **`assets`**: one per successfully mirrored job ([ADR 0004](decisions/0004-asset-mirroring-r2-retention.md)). Absence of a row (or `mirror_status != done`) means there's nothing in R2 yet for that job — the frontend falls back to the provider's own (possibly already-expired) URL in `jobs.output`.
 - **`voice_catalog`**: a synced mirror of what Azure/Google/Fish Audio's own voice lists contain ([ADR 0007](decisions/0007-scheduled-tasks-module.md)) — read-only from the backend's perspective, overwritten wholesale (or diffed) on each sync run. Never hand-edited.
 - **`app_settings`**: generic key-value store for tunable scalars ([ADR 0012](decisions/0012-app-settings-table.md)) — `signup_bonus_credits`, `tts_credits_per_10_chars`, `fish_tts_model` (which Fish Audio TTS model `providers/fish_audio.py` sends, e.g. `s2.1-pro` — a vendor can retire/replace its recommended model on its own schedule, so this is a config value to bump, not a constant to redeploy for), and future values like them. Read by whatever service needs the value (credits service reads the TTS rate; user-bootstrap reads the signup bonus; `services/jobs.py submit_tts` reads the Fish model, fresh per-request, only when routing to Fish Audio); written only through `PATCH /admin/settings/{key}`.
+- **`credit_purchases`**: one row per attempted Stripe Checkout Session for a credit pack ([ADR 0024](decisions/0024-credit-purchases-stripe-checkout.md)) — created `pending` at session-creation time, before any payment has happened, so the webhook that (hopefully) arrives later always has a real row to find and lock. `credits`/`amount_usd_cents` are a snapshot of the pack's price *at purchase time*, independent of `app_settings.credit_packages` changing later. `stripe_checkout_session_id` is the idempotency key — `services/billing.py complete_purchase()` locks this row (`SELECT ... FOR UPDATE`, the same idiom `finalize_kie_job` uses) before crediting the wallet, so Stripe's at-least-once webhook delivery can't double-credit it.
 - **`kie_categories`/`kie_models`**: the hand-curated Kie model catalog ([ADR 0015](decisions/0015-kie-model-catalog.md)) — real tables, not an `app_settings` JSON blob, because this data grows one row at a time (a new model = one `INSERT`), the same shape as `voice_catalog`. `kie_models.pricing` only ever produces the up-front credit hold; settlement always uses Kie's own `creditsConsumed` (`services/jobs.py finalize_kie_job`), 1:1, never this table. Verified against three real model families (Flux-2, GPT Image 2.5, Grok Imagine Video) — see `services/kie_catalog.py`'s seed data for the actual rows. `input_schema`'s field-type vocabulary is not fixed at 4 types: `image` ([ADR 0016](decisions/0016-kie-image-to-image-uploads.md)) was added the moment a second category (`image-to-image`) actually needed it, no schema/migration change required since it's still just `jsonb` — a new type is a code change (the frontend needs to know how to render it) but never a database one. `model_id` (our own catalog id) and `provider_model_id` (the literal string sent to Kie) can differ ([ADR 0017](decisions/0017-kie-video-and-catalog-splitting.md)) — verified real: Veo 3.1's Lite/Fast/Quality tiers are three catalog rows that all share `provider_model_id="veo-3-1"`, with `fixed_inputs` pinning the one field (a real Kie API quirk: the vendor calls the tier "model" too, confusingly, inside `input`) that actually distinguishes them.
 
 ## Config vs. data — three kinds, not two
 
 - **Structural/engineering config** — Kie's model catalog and pricing rules (which `model_id`s exist, input schemas, credit formulas — [product-scope.md §1.1](product-scope.md), [ADR 0015](decisions/0015-kie-model-catalog.md)). **Ours to curate**, changes only when we deliberately add a model. **DB-backed from the start** (`kie_categories`/`kie_models`), not a file that later gets promoted — this hit the "admin needs to edit it without a redeploy" trigger immediately (the whole point of the design was adding a model via data only), so it skipped the file stage entirely. The rule below is still right for the *next* new value of this kind; this one just happened to clear the bar on day one.
 - **A provider's own catalog, outside our control** — `voice_catalog` (Azure/Google/Fish Audio's voices). Changes on the provider's schedule, not ours; we mirror it, we don't author it — hence a table kept fresh by a scheduled sync ([ADR 0007](decisions/0007-scheduled-tasks-module.md)) from day one, never a file we hand-edit.
-- **Simple scalar business/ops settings** — the TTS credit rate, the signup bonus, and future values like them ([ADR 0012](decisions/0012-app-settings-table.md)). Not structurally complex, and the whole point is a non-engineer can tune them without a deploy — so they live in `app_settings` (`key`, `value` (jsonb), `updated_at`, `updated_by`) from day one too, just like `voice_catalog` but for a different reason (tunability, not external-source mirroring).
+- **Simple business/ops settings a non-engineer should be able to tune without a deploy** — the TTS credit rate and the signup bonus started this category as bare scalars ([ADR 0012](decisions/0012-app-settings-table.md)), but it turned out to cover small *structured* values too, not just scalars: `capability_menu` (the "+" menu's entries) and `credit_packages` ([ADR 0024](decisions/0024-credit-purchases-stripe-checkout.md), the three purchasable credit packs) are both JSON arrays living in the same `app_settings` table for the same reason — a handful of rows a human (growth/ops/the founder) edits directly, not a catalog with its own independent lifecycle the way `kie_models` earns a dedicated table for. All of it lives in `app_settings` (`key`, `value` (jsonb), `updated_at`, `updated_by`) from day one, same table `voice_catalog` uses but for a different reason (tunability, not external-source mirroring).
 
 The rule for a *new* value going forward: engineering-curated and structurally complex -> file, promoted later if needed. Sourced from a provider we don't control -> table, always. A scalar someone outside engineering wants to flip -> `app_settings`, always.
 
