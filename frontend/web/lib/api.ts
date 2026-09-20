@@ -97,7 +97,9 @@ export interface JobResponse {
     model_id?: string;
     inputs?: Record<string, string | number | boolean | string[]>;
   };
-  output: { asset_url?: string | null; voice_model_id?: string } | null;
+  // `asset_url` is a direct, public R2 URL (ADR 0027); `asset_expired` is set
+  // once the retention sweep has deleted the file (the URL is then null).
+  output: { asset_url?: string | null; asset_expired?: boolean; voice_model_id?: string } | null;
   error: string | null;
   estimated_cost: number;
   actual_cost: number | null;
@@ -454,20 +456,6 @@ export const api = {
         uploaded_r2_keys: options?.uploadedR2Keys ?? [],
       }),
     }),
-
-  /** `output.asset_url` is a path on our own API (proxying R2 — see backend
-   * services/assets.py), so it needs the same auth header as everything
-   * else; this fetches it as a Blob URL for an <audio>/<a download> element,
-   * since neither can attach an Authorization header itself. */
-  assetBlobUrl: async (assetUrl: string): Promise<string> => {
-    const token = await auth.currentUser?.getIdToken();
-    const res = await fetch(`${API_BASE}${assetUrl}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-    if (!res.ok) throw new ApiError(res.status, "error", "Failed to load asset.");
-    const blob = await res.blob();
-    return URL.createObjectURL(blob);
-  },
 
   // ---- Admin (ADR 0020) — `frontend/web`'s `(admin)` route group. The
   // real enforcement is `require_admin` on every one of these routes

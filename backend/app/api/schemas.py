@@ -4,7 +4,9 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from app.services import assets as assets_service
 
 
 class ErrorBody(BaseModel):
@@ -210,6 +212,18 @@ class KieCategoryAdmin(BaseModel):
     model_config = {"from_attributes": True}
 
 
+def _resolve_asset_url(output: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A job's stored `output` holds only the R2 object key (`asset_key`);
+    clients get a ready-to-load `asset_url` instead (ADR 0027) — built here,
+    at response time, so the serving domain can change without touching any
+    stored row. `asset_key` itself never leaves the backend."""
+    if not output or "asset_key" not in output:
+        return output
+    resolved = {k: v for k, v in output.items() if k != "asset_key"}
+    resolved["asset_url"] = assets_service.public_url(output["asset_key"])
+    return resolved
+
+
 class JobResponse(BaseModel):
     id: uuid.UUID
     capability: str
@@ -225,6 +239,8 @@ class JobResponse(BaseModel):
     completed_at: datetime | None
 
     model_config = {"from_attributes": True}
+
+    _output_asset_url = field_validator("output", mode="after")(_resolve_asset_url)
 
 
 class AdminJobResponse(JobResponse):
@@ -250,6 +266,8 @@ class GalleryItemResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    _output_asset_url = field_validator("output", mode="after")(_resolve_asset_url)
 
 
 class GalleryPage(BaseModel):

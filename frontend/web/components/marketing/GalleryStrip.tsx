@@ -6,12 +6,10 @@ import { api, type GalleryItem } from "@/lib/api";
 import { en as content } from "@/content/marketing/en";
 
 /** A real, unauthenticated strip of `GET /gallery` (ADR 0010) on the
- * homepage — genuine captions/timestamps, not mockup content. Deliberately
- * text-only: `GET /jobs/{id}/asset` (the only way to fetch the actual
- * audio/image/video bytes) still requires a logged-in viewer, so an
- * anonymous visitor here can't play the media itself yet (ADR 0019) —
- * widening that is a real auth-boundary decision, not something to slip in
- * as a side effect of a marketing page. */
+ * homepage — genuine captions/timestamps, not mockup content. Text-only for
+ * now (ADR 0019): a public item's `output.asset_url` is a direct public R2
+ * URL since ADR 0027, so thumbnails/playback here are now a pure design
+ * choice rather than an auth-boundary problem — just not built yet. */
 export function GalleryStrip() {
   const [items, setItems] = useState<GalleryItem[] | null>(null);
 

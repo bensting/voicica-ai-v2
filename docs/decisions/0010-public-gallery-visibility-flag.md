@@ -1,6 +1,6 @@
 # ADR 0010: Public Gallery Is a Visibility Flag, Not a Separate Content System
 
-- Status: Accepted
+- Status: Accepted — **note ([ADR 0027](0027-public-asset-delivery-and-retention.md))**: asset files are now served from unguessable public R2 URLs, so `visibility` means "listed in the public gallery", not "nobody else can open the file".
 - Date: 2026-09-11
 
 ## Context

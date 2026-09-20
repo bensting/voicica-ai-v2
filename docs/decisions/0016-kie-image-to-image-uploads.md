@@ -1,6 +1,6 @@
 # ADR 0016: Kie Image-to-Image — Short-Lived Public Uploads
 
-- Status: Accepted
+- Status: Accepted — **note ([ADR 0027](0027-public-asset-delivery-and-retention.md))**: `R2_PUBLIC_BASE_URL` is now also how every generated asset is served to browsers, so it is required in all environments (a custom domain in production), not only for image-to-image.
 - Date: 2026-09-12
 
 ## Context

@@ -56,7 +56,7 @@ Visual language follows the prior project's native app (dark, gradient CTA — s
 
 ## Verified
 
-Signed up a real account through the actual browser UI, submitted a real TTS job, played the resulting audio back (through the backend's asset proxy, not a raw R2 URL — see `backend/README.md`), and confirmed the credit balance, history entry, and public/private toggle all reflect reality. Not mocked at any layer.
+Signed up a real account through the actual browser UI, submitted a real TTS job, played the resulting audio back (at the time through a backend asset proxy; since [ADR 0027](../../docs/decisions/0027-public-asset-delivery-and-retention.md) media loads directly from R2's public URL and that proxy is gone), and confirmed the credit balance, history entry, and public/private toggle all reflect reality. Not mocked at any layer.
 
 ## Not built yet
 

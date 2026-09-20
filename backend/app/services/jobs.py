@@ -36,7 +36,6 @@ from typing import Any
 import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.core import pg_queue
 from app.core import queue as queue_service
@@ -684,7 +683,11 @@ async def _complete_kie_success(
         media_bytes, content_type = await _download(result_urls[0])
         extension = _EXTENSION_BY_CONTENT_TYPE.get(content_type, "bin")
         asset_fields = await assets_service.upload_bytes(
-            job_id=job.id, data=media_bytes, content_type=content_type, extension=extension
+            job_id=job.id,
+            data=media_bytes,
+            content_type=content_type,
+            extension=extension,
+            retention_days=await app_settings.get_setting(db, "asset_retention_days"),
         )
         db.add(
             Asset(
@@ -700,8 +703,9 @@ async def _complete_kie_success(
     job.actual_cost = actual_cost
     job.completed_at = datetime.now(UTC)
     job.provider_state = job_status.provider_state
-    asset_url = f"/jobs/{job.id}/asset" if asset_fields else None
-    job.output = {"asset_url": asset_url}
+    # Only the object key is stored (ADR 0027) — the public URL is derived at
+    # response time (`schemas.py`), so the serving domain can change freely.
+    job.output = {"asset_key": asset_fields.get("r2_key")}
     await publish_job_event(job)
 
 
@@ -721,7 +725,11 @@ async def _complete_success(
     if audio_bytes:
         extension = "mp3" if "mpeg" in content_type else "wav"
         asset_fields = await assets_service.upload_bytes(
-            job_id=job.id, data=audio_bytes, content_type=content_type, extension=extension
+            job_id=job.id,
+            data=audio_bytes,
+            content_type=content_type,
+            extension=extension,
+            retention_days=await app_settings.get_setting(db, "asset_retention_days"),
         )
         db.add(
             Asset(
@@ -736,11 +744,7 @@ async def _complete_success(
     job.status = "succeeded"
     job.actual_cost = actual_cost
     job.completed_at = datetime.now(UTC)
-    # A relative path the client fetches through us (with its normal auth
-    # header), not a raw R2 URL — see assets.download_bytes for why presigned
-    # URLs aren't used here.
-    asset_url = f"/jobs/{job.id}/asset" if asset_fields else None
-    job.output = {"asset_url": asset_url}
+    job.output = {"asset_key": asset_fields.get("r2_key")}  # see _complete_kie_success
     await publish_job_event(job)
 
 
@@ -760,24 +764,5 @@ async def get_job(db: AsyncSession, job_id: uuid.UUID, *, user_id: str) -> Job |
     happens in a worker, not inline in the submitting request anymore."""
     job = await db.get(Job, job_id)
     if job is None or job.user_id != user_id:
-        return None
-    return job
-
-
-async def get_job_with_asset(db: AsyncSession, job_id: uuid.UUID, *, user_id: str) -> Job | None:
-    """Same as `get_job`, but with `.asset` eagerly loaded (selectinload) —
-    for `GET /jobs/{id}/asset`, which needs the R2 key. `db.get()`'s default
-    lazy relationship access isn't awaitable outside an explicit loader in an
-    async session, hence the separate query shape rather than reusing `get_job`.
-
-    Unlike `get_job`, this allows a *public* job's asset through for any
-    logged-in user, not just the owner (ADR 0010 — gallery items are meant
-    to be played by other people; the caller here is still authenticated,
-    since Explore/gallery browsing lives behind the app's login for now, but
-    ownership specifically shouldn't gate a public job's audio)."""
-    job = (
-        await db.execute(select(Job).options(selectinload(Job.asset)).where(Job.id == job_id))
-    ).scalar_one_or_none()
-    if job is None or (job.user_id != user_id and job.visibility != "public"):
         return None
     return job

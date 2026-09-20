@@ -12,8 +12,9 @@ from typing import Any
 from sqlalchemy import select
 
 from app.core.db import async_session_factory
-from app.models.models import CreditHold, Job
+from app.models.models import Asset, CreditHold, Job
 from app.providers.registry import get_provider_by_name
+from app.services import assets as assets_service
 from app.services import credits, jobs
 
 logger = logging.getLogger(__name__)
@@ -91,6 +92,54 @@ async def sweep_kie_processing_jobs(ctx: dict[str, Any]) -> int:
     if resolved:
         logger.info("Kie poll-sweep resolved %d job(s)", resolved)
     return resolved
+
+
+_EXPIRY_BATCH = 200
+
+
+async def sweep_expired_assets(ctx: dict[str, Any]) -> int:
+    """ADR 0027 — the one place retention is actually enforced: deletes the R2
+    object for every asset past its own `expires_at` (stamped at creation from
+    `asset_retention_days`), marks it `expired`, and rewrites the job's
+    `output` to say so, so history/Explore stop showing a dead link. The
+    database is the single source of truth for expiry (an R2 lifecycle rule
+    can't read our settings, so it's only ever a wider backstop for orphans,
+    never the primary mechanism). A failed R2 delete leaves the row untouched
+    and is retried on the next tick."""
+    total = 0
+    while True:
+        async with async_session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(Asset, Job)
+                    .join(Job, Job.id == Asset.job_id)
+                    .where(
+                        Asset.mirror_status == "done",
+                        Asset.expires_at.is_not(None),
+                        Asset.expires_at < datetime.now(UTC),
+                    )
+                    .limit(_EXPIRY_BATCH)
+                )
+            ).all()
+            done = 0
+            for asset, job in rows:
+                try:
+                    await assets_service.delete_object(asset.r2_key)
+                except Exception:
+                    logger.warning("Expiry sweep: couldn't delete %s, will retry", asset.r2_key, exc_info=True)
+                    continue
+                asset.mirror_status = "expired"
+                remaining = {k: v for k, v in (job.output or {}).items() if k != "asset_key"}
+                job.output = {**remaining, "asset_key": None, "asset_expired": True}
+                done += 1
+            if done:
+                await db.commit()
+        total += done
+        if len(rows) < _EXPIRY_BATCH or done == 0:
+            break
+    if total:
+        logger.info("Expiry sweep deleted %d expired asset(s)", total)
+    return total
 
 
 ## Since ADR 0026, both sweeps above run as plain `asyncio.sleep()` timer

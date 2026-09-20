@@ -154,7 +154,7 @@ class Asset(Base):
     id: Mapped[uuid.UUID] = _uuid_pk()
     job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("jobs.id"), unique=True)
     r2_key: Mapped[str] = mapped_column(String(512))
-    mirror_status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|done|failed
+    mirror_status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|done|failed|expired (ADR 0027)
     mirrored_at: Mapped[datetime | None] = mapped_column(_TZ, nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(_TZ, nullable=True)
 

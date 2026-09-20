@@ -1,6 +1,6 @@
 # ADR 0004: Mirror Generated Assets into Cloudflare R2 with a Retention Window
 
-- Status: Accepted
+- Status: Accepted — **delivery and retention mechanics superseded by [ADR 0027](0027-public-asset-delivery-and-retention.md)** (assets are now served directly from R2's public domain instead of through the API, and retention is a database setting enforced by an hourly sweep). The decision to mirror every result into R2 stands.
 - Date: 2026-09-11
 
 ## Context

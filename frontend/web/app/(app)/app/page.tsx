@@ -34,7 +34,6 @@ export default function HomePage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const blobUrlsRef = useRef<Map<string, string>>(new Map());
 
   const items = itemsByTab[activeTab];
 
@@ -51,15 +50,13 @@ export default function HomePage() {
     audioRef.current = audio;
     const onEnded = () => setPlayingId(null);
     audio.addEventListener("ended", onEnded);
-    const blobUrls = blobUrlsRef.current;
     return () => {
       audio.removeEventListener("ended", onEnded);
       audio.pause();
-      blobUrls.forEach((url) => URL.revokeObjectURL(url));
     };
   }, []);
 
-  async function togglePlay(item: GalleryItem) {
+  function togglePlay(item: GalleryItem) {
     // Only a TTS-shaped item (`input.text`) is playable audio — a Kie item
     // (`input.inputs`, ADR 0015) renders a static thumbnail row instead
     // (GalleryRow below), so this never actually gets called for one, but
@@ -74,16 +71,7 @@ export default function HomePage() {
       return;
     }
 
-    let url = blobUrlsRef.current.get(item.id);
-    if (!url) {
-      try {
-        url = await api.assetBlobUrl(item.output.asset_url);
-        blobUrlsRef.current.set(item.id, url);
-      } catch {
-        return;
-      }
-    }
-    audio.src = url;
+    audio.src = item.output.asset_url;
     audio.play().catch((e: DOMException) => {
       // Switching tracks quickly aborts the previous play() promise
       // (AbortError, "interrupted by a new load request") — expected, not a
@@ -231,35 +219,14 @@ function VoiceRow({
   );
 }
 
-/** One grid cell for the Images/Videos tabs. Fetches its own blob URL
- * (same auth'd `assetBlobUrl` helper the audio row already used) rather
- * than the parent pre-fetching every item up front — simpler state, and
- * fine at today's content volume; revisit with lazy/viewport-based
- * fetching if a real feed ever grows past a screen or two. */
+/** One grid cell for the Images/Videos tabs. Loads straight from the asset's
+ * public URL (ADR 0027) — the browser handles lazy loading, caching and
+ * (for video) range requests itself, no auth'd fetch/blob step. */
 function MediaCard({ item, isVideo }: { item: GalleryItem; isVideo: boolean }) {
-  const [url, setUrl] = useState<string | null>(null);
+  const url = item.output?.asset_url ?? null;
   const [playing, setPlaying] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const caption = (item.input.inputs?.prompt as string | undefined) ?? "Untitled";
-
-  useEffect(() => {
-    let cancelled = false;
-    let objectUrl: string | null = null;
-    if (item.output?.asset_url) {
-      api.assetBlobUrl(item.output.asset_url).then((blobUrl) => {
-        if (cancelled) {
-          URL.revokeObjectURL(blobUrl);
-          return;
-        }
-        objectUrl = blobUrl;
-        setUrl(blobUrl);
-      }).catch(() => {});
-    }
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [item.output?.asset_url]);
 
   function toggleVideo() {
     const video = videoRef.current;
@@ -277,11 +244,6 @@ function MediaCard({ item, isVideo }: { item: GalleryItem; isVideo: boolean }) {
       onClick={isVideo ? toggleVideo : undefined}
       className="relative aspect-[4/5] overflow-hidden rounded-2xl bg-surface"
     >
-      {url === null && (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <div className="h-4 w-4 animate-spin rounded-full border-2 border-border-soft border-t-a3" />
-        </div>
-      )}
       {url && (isVideo ? (
         <video
           ref={videoRef}
@@ -289,13 +251,15 @@ function MediaCard({ item, isVideo }: { item: GalleryItem; isVideo: boolean }) {
           muted
           playsInline
           loop
+          preload="metadata"
           onEnded={() => setPlaying(false)}
           className="h-full w-full object-cover"
         />
       ) : (
-        // a blob: URL can't go through next/image's remote optimizer.
+        // A user-generated file on R2's public domain — not a static asset
+        // next/image's optimizer (disabled on Workers anyway, ADR 0022) helps with.
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={url} alt={caption} className="h-full w-full object-cover" />
+        <img src={url} alt={caption} loading="lazy" className="h-full w-full object-cover" />
       ))}
       {isVideo && url && !playing && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">

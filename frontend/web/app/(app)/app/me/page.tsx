@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { api, type JobResponse, type MeResponse } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { useJobEvents } from "@/lib/job-events";
@@ -216,6 +216,7 @@ function JobCard({ job, onUpdate }: { job: JobResponse; onUpdate: (job: JobRespo
             {job.status === "failed" && job.error && (
               <span className="text-danger"> · {job.error}</span>
             )}
+            {job.output?.asset_expired && <span> · Expired</span>}
           </div>
         </div>
         {job.status === "succeeded" && kind !== "none" && (
@@ -298,75 +299,27 @@ function StatusGlyph({
   );
 }
 
-/** Voices keep direct inline playback below the row — nothing to preview
- * visually, so the bottom-sheet treatment Image/Video get would just be an
- * extra tap for no benefit (the user's own call: "Voices没有必要可以直接
- * 播放"). Lazy via the same `IntersectionObserver` pattern used everywhere
- * else in this list, fetched through the same auth'd `assetBlobUrl()`. */
+/** Voices play inline below the row — nothing to preview visually, so the
+ * sheet Image/Video get would just be an extra tap. The file loads straight
+ * from its public URL (ADR 0027); `preload="none"` means nothing is fetched
+ * until the user actually hits play, so a long history costs no requests. */
 function InlineAudio({ assetUrl }: { assetUrl: string }) {
-  const [inView, setInView] = useState(false);
-  const [url, setUrl] = useState<string | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) {
-          setInView(true);
-          observer.disconnect();
-        }
-      },
-      { rootMargin: "400px 0px" },
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
-    if (!inView) return;
-    let cancelled = false;
-    let objectUrl: string | null = null;
-    api.assetBlobUrl(assetUrl).then((blobUrl) => {
-      if (cancelled) {
-        URL.revokeObjectURL(blobUrl);
-        return;
-      }
-      objectUrl = blobUrl;
-      setUrl(blobUrl);
-    }).catch(() => setLoadError("Couldn't load the audio."));
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [inView, assetUrl]);
-
   return (
-    <div ref={containerRef} className="border-t border-border-soft p-3">
-      {loadError && <p className="text-[12px] text-danger">{loadError}</p>}
-      {!loadError && !url && (
-        <div className="flex justify-center py-1">
-          <div className="h-4 w-4 animate-spin rounded-full border-2 border-border-soft border-t-a3" />
-        </div>
-      )}
-      {!loadError && url && (
-        <audio controls src={url} className="w-full">
-          Your browser doesn&apos;t support audio playback.
-        </audio>
-      )}
+    <div className="border-t border-border-soft p-3">
+      <audio controls preload="none" src={assetUrl} className="w-full">
+        Your browser doesn&apos;t support audio playback.
+      </audio>
     </div>
   );
 }
 
 /** Image/Video row glyph, replacing what used to be a full inline
  * expansion of every result (rejected — "我建议是每条记录都有个查看图标
- * 然后统一从底部弹出"). A small lazy-loaded thumbnail doubles as the tap
- * target for the "view" icon overlaid on it; tapping opens the same
- * asset, full-size, in `MediaViewSheet`. Same `IntersectionObserver` +
- * `assetBlobUrl()` lazy-load this list already used for full media, just
- * fetched once and reused for both the thumbnail and the sheet. */
+ * 然后统一从底部弹出"). A small thumbnail doubles as the tap target for the
+ * "view" icon overlaid on it; tapping opens the same asset, full-size, in
+ * `MediaViewSheet`. Loaded straight from the public URL (ADR 0027) — the
+ * browser lazy-loads it (`loading="lazy"` / `preload="metadata"`), no
+ * hand-rolled observer or auth'd fetch needed anymore. */
 function ThumbnailGlyph({
   assetUrl,
   kind,
@@ -376,66 +329,20 @@ function ThumbnailGlyph({
   kind: "image" | "video";
   caption: string;
 }) {
-  const [inView, setInView] = useState(false);
-  const [url, setUrl] = useState<string | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
-  const containerRef = useRef<HTMLButtonElement | null>(null);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) {
-          setInView(true);
-          observer.disconnect();
-        }
-      },
-      { rootMargin: "400px 0px" },
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
-    if (!inView) return;
-    let cancelled = false;
-    let objectUrl: string | null = null;
-    api.assetBlobUrl(assetUrl).then((blobUrl) => {
-      if (cancelled) {
-        URL.revokeObjectURL(blobUrl);
-        return;
-      }
-      objectUrl = blobUrl;
-      setUrl(blobUrl);
-    }).catch(() => {
-      // best-effort thumbnail — the sheet's own load (re-fetch on open) can
-      // still surface an error if it matters at that point.
-    });
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [inView, assetUrl]);
 
   return (
     <>
       <button
-        ref={containerRef}
         onClick={() => setSheetOpen(true)}
         className="relative h-11 w-11 flex-shrink-0 overflow-hidden rounded-xl bg-surface-2"
       >
-        {url && kind === "image" && (
-          // eslint-disable-next-line @next/next/no-img-element -- a fetched, auth-gated Blob URL, not a static/remote asset next/image can optimize
-          <img src={url} alt={caption} className="h-full w-full object-cover" />
+        {kind === "image" && (
+          // eslint-disable-next-line @next/next/no-img-element -- a user-generated file on R2's public domain, not a static asset next/image can optimize
+          <img src={assetUrl} alt={caption} loading="lazy" className="h-full w-full object-cover" />
         )}
-        {url && kind === "video" && (
-          <video src={url} muted playsInline preload="metadata" className="h-full w-full object-cover" />
-        )}
-        {!url && (
-          <div className="flex h-full w-full items-center justify-center">
-            <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-border-soft border-t-a3" />
-          </div>
+        {kind === "video" && (
+          <video src={assetUrl} muted playsInline preload="metadata" className="h-full w-full object-cover" />
         )}
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/25 text-white">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
@@ -448,7 +355,7 @@ function ThumbnailGlyph({
       <MediaViewSheet
         isOpen={sheetOpen}
         onClose={() => setSheetOpen(false)}
-        url={url}
+        url={assetUrl}
         kind={kind}
         caption={caption}
       />
@@ -456,12 +363,36 @@ function ThumbnailGlyph({
   );
 }
 
+/** A cross-origin `<a download>` is ignored by browsers (they navigate to
+ * the file instead), so a real "save" needs the bytes in hand first: fetch
+ * it (R2's bucket has a CORS rule for this site's origins, ADR 0027), save
+ * the blob. If that fails for any reason, fall back to opening the URL in a
+ * new tab — the user can still long-press/save from there. */
+async function downloadFile(url: string): Promise<void> {
+  try {
+    // `cache: "reload"`: the same file was already loaded by an <img>/<video>
+    // (no Origin header), and a cached copy of that has no CORS headers, which
+    // would make this fetch fail intermittently.
+    const res = await fetch(url, { cache: "reload" });
+    if (!res.ok) throw new Error(String(res.status));
+    const blobUrl = URL.createObjectURL(await res.blob());
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = url.split("/").pop() ?? "download";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
+  } catch {
+    window.open(url, "_blank", "noopener");
+  }
+}
+
 /** The unified "view" sheet for Image/Video results — same bottom-sheet
  * visual language `CreateSheet` already established (rounded-t-3xl sheet +
  * blurred backdrop), reused rather than inventing a second sheet pattern.
  * Unlike `CreateSheet` this one covers the bottom nav — it's a focused
- * viewer, not another place to navigate from. Download uses a plain
- * `<a download>` on the already-fetched blob URL (no second request). */
+ * viewer, not another place to navigate from. */
 function MediaViewSheet({
   isOpen,
   onClose,
@@ -471,7 +402,7 @@ function MediaViewSheet({
 }: {
   isOpen: boolean;
   onClose: () => void;
-  url: string | null;
+  url: string;
   kind: "image" | "video";
   caption: string;
 }) {
@@ -502,32 +433,22 @@ function MediaViewSheet({
             </button>
           </div>
 
-          {!url && (
-            <div className="flex justify-center py-10">
-              <div className="h-5 w-5 animate-spin rounded-full border-2 border-border-soft border-t-a3" />
-            </div>
-          )}
-          {url && kind === "image" && (
-            // eslint-disable-next-line @next/next/no-img-element -- a fetched, auth-gated Blob URL, not a static/remote asset next/image can optimize
+          {kind === "image" && (
+            // eslint-disable-next-line @next/next/no-img-element -- a user-generated file on R2's public domain, not a static asset next/image can optimize
             <img src={url} alt={caption} className="w-full rounded-xl" />
           )}
-          {url && kind === "video" && (
-            <video src={url} controls playsInline className="w-full rounded-xl" />
-          )}
-          {url && (
-            <a
-              href={url}
-              download
-              className="mt-3 flex items-center justify-center gap-2 rounded-xl bg-surface-2 py-2.5 text-[13px] font-semibold text-text"
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-                <polyline points="7,10 12,15 17,10" />
-                <line x1="12" y1="15" x2="12" y2="3" />
-              </svg>
-              Download
-            </a>
-          )}
+          {kind === "video" && <video src={url} controls playsInline className="w-full rounded-xl" />}
+          <button
+            onClick={() => void downloadFile(url)}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-surface-2 py-2.5 text-[13px] font-semibold text-text"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+              <polyline points="7,10 12,15 17,10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            Download
+          </button>
         </div>
         <div style={{ paddingBottom: "calc(12px + env(safe-area-inset-bottom, 0px))" }} />
       </div>

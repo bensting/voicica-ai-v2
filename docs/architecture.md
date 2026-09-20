@@ -162,7 +162,7 @@ Confirmed from Kie's docs — these live entirely inside `providers/kie.py`, nev
 - **Under [ADR 0014](decisions/0014-background-job-execution.md), "submit" and "track to completion" are two separate execution steps, not one worker task** — see §3f below. `kie.py`'s `submit()` always returns a `processing` `JobRef` (never waits); `poll()` is called later, by the webhook route or the cron sweep, never from within a long-lived worker task.
 - **The model catalog itself — which `model_id`s exist, their input schema, their pricing — is [ADR 0015](decisions/0015-kie-model-catalog.md)'s subject**, not this section: two real tables (`kie_categories`/`kie_models`), hand-curated, verified against two real model families (Flux-2, GPT Image 2.5). `providers/kie.py` itself has zero per-model code — `model` and `input` are opaque values it never inspects.
 - **A real gotcha, found by an actual failed call, not anticipated**: Kie returned **HTTP 500** for `flux-2/pro-text-to-image` when a required `resolution` field was missing from `input` — not a 400. `services/jobs.py`'s shared `_is_transient_error()` heuristic (5xx = transient, retry) treats this as retryable, so a genuinely wrong/incomplete `input_schema` costs a wasted ~15s of retries before failing for real, rather than failing immediately. No charge either way (ADR 0003), so this is a latency/wasted-call cost, not a correctness bug — the actual fix is keeping `kie_models.input_schema` complete (verified per real model, not guessed from Kie's simplified playground Form view, which doesn't always show every required field).
-- **Image-to-image needs a real public URL, not a file upload or base64** ([ADR 0016](decisions/0016-kie-image-to-image-uploads.md)) — confirmed against a real request body from both Flux-2 and GPT Image 2.5: the reference-image field (`input_urls` on every model checked) is an array Kie's own servers fetch themselves. This doesn't fit `services/assets.py`'s existing authenticated-proxy story (`GET /jobs/{id}/asset`) at all, since Kie can't attach this app's Firebase header — `POST /kie/uploads` hosts the reference at a short-lived public R2 URL instead, deleted the moment its job resolves.
+- **Image-to-image needs a real public URL, not a file upload or base64** ([ADR 0016](decisions/0016-kie-image-to-image-uploads.md)) — confirmed against a real request body from both Flux-2 and GPT Image 2.5: the reference-image field (`input_urls` on every model checked) is an array Kie's own servers fetch themselves. This didn't fit the authenticated-proxy story that existed at the time (`GET /jobs/{id}/asset`, since removed by [ADR 0027](decisions/0027-public-asset-delivery-and-retention.md) — every asset is now served from R2's public domain), since Kie can't attach this app's Firebase header — `POST /kie/uploads` hosts the reference at a short-lived public R2 URL, deleted the moment its job resolves.
 
 If we ever build against another async, catalog-style vendor, this section is the template for what "provider specifics" means in practice — vendor state enum, callback vs. polling, vendor-native cost reporting, asset lifetime all stay inside that vendor's own adapter.
 
@@ -222,7 +222,7 @@ backend/
 │   ├── services/
 │   │   ├── jobs.py            # orchestrates submit/execute, owns the hold→settle/release lifecycle (ADR 0003/0014)
 │   │   ├── credits.py          # wallet operations (hold, settle, release, ADR 0003)
-│   │   ├── assets.py            # mirrors a succeeded job's output into R2, tracks retention (ADR 0004)
+│   │   ├── assets.py            # mirrors a succeeded job's output into R2, builds its public URL (ADR 0004, ADR 0027)
 │   │   ├── voice_catalog.py      # reads the synced Azure/Google voice list (written by scheduled/sync_catalog.py)
 │   │   ├── voice_models.py        # a user's own cloned voices (ADR 0009)
 │   │   ├── kie_catalog.py          # the hand-curated Kie model catalog — categories, models, pricing rule (ADR 0015)
@@ -235,7 +235,7 @@ backend/
 │   │   └── sync_catalog.py       # pulls Azure/Google's real voice list into voice_catalog — `python -m app.scheduled.sync_catalog`
 │   ├── worker/                # Postgres-native job dispatch (ADR 0026) — one process, not five
 │   │   ├── dispatcher.py         # claims `jobs` rows (SKIP LOCKED), woken by Postgres NOTIFY; per-provider asyncio.Semaphores; retry/timeout; run: `python -m app.worker.dispatcher`
-│   │   └── cron.py               # sweep_stuck_jobs (ADR 0007) + sweep_kie_processing_jobs (ADR 0015) — plain business logic, run as asyncio.sleep() timer loops inside dispatcher.py; catalog sync still run by hand
+│   │   └── cron.py               # sweep_stuck_jobs (ADR 0007) + sweep_kie_processing_jobs (ADR 0015) + sweep_expired_assets (ADR 0027) — plain business logic, run as asyncio.sleep() timer loops inside dispatcher.py; catalog sync still run by hand
 │   ├── api/                  # FastAPI routes — input validation, calls services/
 │   │   ├── routes_tts.py, routes_voice_models.py     # synchronous-provider capabilities
 │   │   ├── routes_kie.py                              # generic /generate/kie + /kie/categories, /kie/models (ADR 0015)

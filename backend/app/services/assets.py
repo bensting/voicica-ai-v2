@@ -1,4 +1,6 @@
-"""Mirrors a succeeded job's output into Cloudflare R2 (ADR 0004).
+"""Mirrors a succeeded job's output into Cloudflare R2 (ADR 0004) and hands
+out its public URL (ADR 0027 — clients load media straight from R2's public
+domain; this backend no longer proxies any bytes).
 
 Fish Audio (and every synchronous provider) returns the media as bytes
 directly in the response body — there's no temporary vendor URL to download
@@ -17,10 +19,10 @@ from starlette.concurrency import run_in_threadpool
 
 from app.core.config import get_settings
 
-# Placeholder retention window. Per-capability retention (ADR 0004) is a
-# candidate future app_settings value (ADR 0012) once more than one capability
-# mirrors assets — not worth a settings row for a single hardcoded number yet.
-_DEFAULT_RETENTION_DAYS = 90
+# Object keys are immutable (a job id never gets a second file), so a long
+# browser/CDN cache is safe; capped at a week rather than "immutable forever"
+# so a deleted-at-expiry object doesn't linger in edge caches for a year.
+_CACHE_CONTROL = "public, max-age=604800"
 
 # Explicit rather than relying on botocore's own default (also 60/60, as it
 # happens — verified, not assumed) — every other outbound call in this
@@ -48,17 +50,39 @@ def _r2_client():
     )
 
 
+def public_url(r2_key: str | None) -> str | None:
+    """The browser-loadable URL for an object (ADR 0027) — `R2_PUBLIC_BASE_URL`
+    is the bucket's public domain (`assets.voicica.ai` in production, the
+    bucket's own `pub-<hash>.r2.dev` URL in local dev). Built at response
+    time rather than stored, so moving the bucket behind a different domain
+    never strands existing rows."""
+    settings = get_settings()
+    if not r2_key or not settings.r2_public_base_url:
+        return None
+    return f"{settings.r2_public_base_url.rstrip('/')}/{r2_key}"
+
+
 async def upload_bytes(
-    *, job_id: uuid.UUID, data: bytes, content_type: str, extension: str
+    *, job_id: uuid.UUID, data: bytes, content_type: str, extension: str, retention_days: int
 ) -> dict[str, Any]:
     """Uploads `data` to R2 under a job-namespaced key. boto3 is sync, so the
-    actual network call runs off the event loop in a threadpool."""
+    actual network call runs off the event loop in a threadpool.
+    `retention_days` (the `asset_retention_days` app_setting, ADR 0027) is
+    stamped into `expires_at` per asset at creation time, so changing the
+    setting later only affects new files — never retroactively deletes (or
+    resurrects) existing ones."""
     settings = get_settings()
     key = f"jobs/{job_id}.{extension}"
 
     def _put() -> None:
         client = _r2_client()
-        client.put_object(Bucket=settings.r2_bucket, Key=key, Body=data, ContentType=content_type)
+        client.put_object(
+            Bucket=settings.r2_bucket,
+            Key=key,
+            Body=data,
+            ContentType=content_type,
+            CacheControl=_CACHE_CONTROL,
+        )
 
     await run_in_threadpool(_put)
 
@@ -67,22 +91,19 @@ async def upload_bytes(
         "r2_key": key,
         "mirror_status": "done",
         "mirrored_at": now,
-        "expires_at": now + timedelta(days=_DEFAULT_RETENTION_DAYS),
+        "expires_at": now + timedelta(days=retention_days),
     }
 
 
 async def upload_public_bytes(
     *, owner_id: str, data: bytes, content_type: str, extension: str
 ) -> dict[str, str]:
-    """A Kie image-to-image reference upload (ADR 0016) — the one case in
-    this codebase where something needs a real, unauthenticated public URL:
-    Kie's own servers fetch a job's `input_urls` themselves, and obviously
-    can't attach this app's Firebase auth header the way `GET
-    /jobs/{id}/asset` requires. Distinct `uploads/` prefix (never `jobs/`,
-    which holds generated outputs) so retention/cleanup can differ per
-    prefix — the caller deletes this the moment its job reaches any
-    terminal state (`services/jobs.py cleanup_kie_uploads`), not kept for
-    ADR 0004's 90-day output-retention window.
+    """A Kie image-to-image reference upload (ADR 0016) — Kie's own servers
+    fetch a job's `input_urls` themselves, so it needs a real public URL.
+    Distinct `uploads/` prefix (never `jobs/`, which holds generated
+    outputs) so retention/cleanup can differ per prefix — the caller deletes
+    this the moment its job reaches any terminal state (`services/jobs.py
+    cleanup_kie_uploads`), not kept for the output-retention window.
 
     Raises `RuntimeError` if `R2_PUBLIC_BASE_URL` isn't configured — a
     silently-broken image-to-image feature (a URL Kie can never actually
@@ -92,8 +113,8 @@ async def upload_public_bytes(
     if not settings.r2_public_base_url:
         raise RuntimeError(
             "R2_PUBLIC_BASE_URL is not configured — image-to-image needs a public "
-            "URL Kie's servers can fetch (see ADR 0016); a Cloudflare R2 bucket's "
-            "own public dev URL is enough, no custom domain required."
+            "URL Kie's servers can fetch (ADR 0016), and every generated asset is "
+            "served from it too (ADR 0027)."
         )
     key = f"uploads/{owner_id}/{uuid.uuid4()}.{extension}"
 
@@ -118,21 +139,3 @@ async def delete_object(r2_key: str) -> None:
         client.delete_object(Bucket=settings.r2_bucket, Key=r2_key)
 
     await run_in_threadpool(_delete)
-
-
-async def download_bytes(r2_key: str) -> tuple[bytes, str]:
-    """Fetches an object's bytes + content-type from R2, for the backend to
-    hand to a client itself (`GET /jobs/{id}/asset`) rather than a presigned
-    URL: a recent botocore/R2 incompatibility makes presigned GET URLs from
-    this environment reject with "Missing x-amz-content-sha256" — they
-    require headers a plain `<audio src>`/browser fetch can't attach, which
-    defeats the point of presigning. Proxying is the fallback that's actually
-    verified working; revisit presigned URLs once that's resolved upstream."""
-    settings = get_settings()
-
-    def _get() -> tuple[bytes, str]:
-        client = _r2_client()
-        obj = client.get_object(Bucket=settings.r2_bucket, Key=r2_key)
-        return obj["Body"].read(), obj.get("ContentType", "application/octet-stream")
-
-    return await run_in_threadpool(_get)

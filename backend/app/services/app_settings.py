@@ -21,6 +21,11 @@ _DEFAULTS: dict[str, Any] = {
     # tts_credits_per_10_chars above; PATCH /admin/settings/fish_tts_model
     # (already generic, no new endpoint needed) is how it's changed.
     "fish_tts_model": "s2.1-pro",
+    # ADR 0027 — how long a generated file stays in R2 (and visible in
+    # history/Explore) before the daily sweep deletes it. Stamped into each
+    # asset's own `expires_at` at creation, so changing this only affects
+    # files generated afterwards.
+    "asset_retention_days": 90,
 }
 
 

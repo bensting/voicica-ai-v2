@@ -203,7 +203,7 @@ export const en: MarketingContent = {
           body: [
             "Generating a result means your text, prompt, or reference image is sent to the relevant third-party AI provider for that request — Microsoft Azure or Google Cloud (text-to-speech), Fish Audio (text-to-speech and voice cloning), or Kie.ai (image and video generation). Each provider processes that specific request; we don't control their internal retention beyond what their own terms specify.",
             "Voice cloning: the audio sample you provide is used once, to train a voice model with our voice-cloning provider. The sample itself is not stored by us after training completes — only a reference to the resulting reusable voice model is kept.",
-            "Generated assets (audio, images, video) are copied to our own storage (Cloudflare R2) so you can access your history, and are kept for a limited retention period.",
+            "Generated assets (audio, images, video) are copied to our own storage (Cloudflare R2) so you can access your history, and are kept for a limited retention period (currently 90 days), after which they are deleted.",
           ],
         },
         {
@@ -217,7 +217,8 @@ export const en: MarketingContent = {
         {
           heading: "What's public",
           body: [
-            "By default, everything you create is private, visible only to you. You may choose to mark a specific creation as public, which makes it visible in the public gallery to anyone, including people who aren't signed in — without revealing your identity, email, or account details alongside it. You can change a creation back to private at any time.",
+            "By default, your creations are private: they are not listed in the public gallery or shown to other users. To keep things fast, the files themselves are served from unlisted web addresses that are long and effectively impossible to guess — but anyone who has a direct link to a file can open it, so only share links with people you trust.",
+            "You may choose to mark a specific creation as public, which lists it in the public gallery for anyone to see, including people who aren't signed in — without revealing your identity, email, or account details alongside it. Marking it private again removes it from the gallery, but cannot revoke a link that was already shared; the file is deleted when its retention period ends.",
           ],
         },
         {

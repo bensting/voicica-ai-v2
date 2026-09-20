@@ -1,11 +1,11 @@
-"""GET /jobs, GET /jobs/{id}, PATCH /jobs/{id}, GET /jobs/{id}/asset —
-docs/api-contract.md "Jobs" (the last one isn't in that doc yet — added
-because the browser needs *something* to fetch audio from; see
-services/assets.py for why it's a proxy, not a presigned R2 URL)."""
+"""GET /jobs, GET /jobs/{id}, PATCH /jobs/{id} — docs/api-contract.md "Jobs".
+Media bytes are never served from here: a job's `output.asset_url` points
+straight at R2's public domain (ADR 0027)."""
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +14,7 @@ from app.api.schemas import JobResponse
 from app.core.auth import CurrentUser, get_current_user
 from app.core.db import get_db
 from app.models.models import Job
-from app.services import assets as assets_service
+from app.services import app_settings
 from app.services import jobs as jobs_service
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -25,9 +25,16 @@ async def list_jobs(
     user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[JobResponse]:
+    # History only spans the retention window (ADR 0027) — past it, the files
+    # are gone, so the rows would just be dead entries.
+    retention_days = await app_settings.get_setting(db, "asset_retention_days")
+    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
     rows = (
         await db.execute(
-            select(Job).where(Job.user_id == user.id).order_by(Job.created_at.desc()).limit(50)
+            select(Job)
+            .where(Job.user_id == user.id, Job.created_at >= cutoff)
+            .order_by(Job.created_at.desc())
+            .limit(50)
         )
     ).scalars().all()
     return [JobResponse.model_validate(row) for row in rows]
@@ -68,16 +75,3 @@ async def update_job_visibility(
     job.visibility = visibility
     await db.commit()  # see the comment in services/jobs.py submit_tts — same reasoning
     return JobResponse.model_validate(job)
-
-
-@router.get("/{job_id}/asset")
-async def get_job_asset(
-    job_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> Response:
-    job = await jobs_service.get_job_with_asset(db, job_id, user_id=user.id)
-    if job is None or job.asset is None or job.asset.mirror_status != "done":
-        raise APIError(status_code=404, code="not_found", message="No asset for this job.")
-    data, content_type = await assets_service.download_bytes(job.asset.r2_key)
-    return Response(content=data, media_type=content_type)

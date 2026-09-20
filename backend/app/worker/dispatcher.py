@@ -22,7 +22,7 @@ from sqlalchemy import text
 from app.core.db import async_session_factory
 from app.core.pg_queue import listen_for_jobs
 from app.services import jobs
-from app.worker.cron import sweep_kie_processing_jobs, sweep_stuck_jobs
+from app.worker.cron import sweep_expired_assets, sweep_kie_processing_jobs, sweep_stuck_jobs
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +189,7 @@ async def run_forever() -> None:
     # else in this set does.
     running.add(asyncio.create_task(_sweep_loop("stuck-job", sweep_stuck_jobs, 300)))
     running.add(asyncio.create_task(_sweep_loop("kie-poll", sweep_kie_processing_jobs, 60)))
+    running.add(asyncio.create_task(_sweep_loop("asset-expiry", sweep_expired_assets, 3600)))
 
     async with listen_for_jobs() as notified:
         await claim_and_dispatch()  # catch up on anything already pending at startup
