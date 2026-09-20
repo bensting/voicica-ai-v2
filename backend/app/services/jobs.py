@@ -4,19 +4,28 @@
 **Since ADR 0014**, "submit" and "execute" are two different functions,
 called from two different places:
 - `submit_tts()`/`submit_voice_model_training()` (called from `api/`) only
-  create the `Job` row, hold credits, and enqueue a task — they never call
-  a provider themselves anymore, so a request handler calling these returns
+  create the `Job` row (as `pending`) and hold credits — they never call a
+  provider themselves anymore, so a request handler calling these returns
   in milliseconds regardless of how long the vendor takes.
 - `execute_tts_job()`/`execute_voice_model_training_job()` (called from
-  `worker/tasks.py`, one arq task per job, with a DB session the worker
-  opened itself — never the request's) do what used to happen inline: call
-  the provider, settle or release credits, write the terminal state.
+  `worker/dispatcher.py`, with a DB session the worker opened itself —
+  never the request's) do what used to happen inline: call the provider,
+  settle or release credits, write the terminal state.
 
 This split is the whole point of ADR 0014 — see its "Context" for the two
 concrete problems (DB-connection-pool exhaustion; Fish Audio's real
 5-concurrent-request limit) that made the old inline shape not scale.
+
+**Since ADR 0026**, the queue itself is the `jobs` table — a `pending` row
+*is* the queue entry, picked up via `SELECT ... FOR UPDATE SKIP LOCKED`
+(`worker/dispatcher.py`), woken up immediately via Postgres `NOTIFY`
+(`core/pg_queue.py`) rather than arq/Redis polling. This module stays
+queue-mechanism-agnostic either way — a `submit_*` function's job here ends
+at "commit a pending row and notify," not "how does something eventually
+run it."
 """
 
+import base64
 import json
 import logging
 import re
@@ -29,6 +38,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core import pg_queue
 from app.core import queue as queue_service
 from app.models.models import Asset, CreditHold, Job, VoiceModel
 from app.providers.base import JobRef, JobStatus
@@ -51,11 +61,11 @@ async def publish_job_event(job: Job) -> None:
 
     Publishes to the owning user's own Redis pub/sub channel — `GET /events`
     (`api/routes_events.py`) subscribes per-connected-user and forwards each
-    message to that one browser tab as an SSE event. Reuses `queue_service`'s
-    existing Redis pool (already a dependency for arq itself; this adds no
-    new external service) via a plain `PUBLISH`, not an arq job — there's
-    nothing here for a worker to pick up later, just a fire-and-forget
-    signal to whoever happens to be listening right now.
+    message to that one browser tab as an SSE event. This is Redis's one
+    remaining job in this codebase (ADR 0026 moved the job queue itself to
+    Postgres) — a plain `PUBLISH` via `queue_service`'s pool, nothing here
+    for anything to pick up later, just a fire-and-forget signal to
+    whoever happens to be listening right now.
 
     Best-effort and silent on failure: a dropped pub/sub message only costs
     the user a slightly-stale "processing" chip until they next reload
@@ -71,16 +81,6 @@ async def publish_job_event(job: Job) -> None:
         logger.warning("Failed to publish job-event for job %s", job.id, exc_info=True)
 
 
-class EnqueueError(Exception):
-    """Raised by a `submit_*` function when the job's row + credit hold were
-    committed but handing the job to the queue failed (Redis unreachable) —
-    ADR 0014's "enqueue failure is a first-class error path", not an edge
-    case: by the time this is raised, the hold has already been released
-    and the job already marked `failed`, so the caller (an `api/` route)
-    just needs to turn this into a `503`-shaped response rather than the
-    `202` it would otherwise send for a job that will now never run."""
-
-
 async def submit_tts(
     db: AsyncSession,
     *,
@@ -93,12 +93,11 @@ async def submit_tts(
     pitch: int = 50,
     visibility: str = "private",
 ) -> Job:
-    """Create a pending TTS job, hold credits, and enqueue it (ADR 0014) —
-    does not call a provider; see `execute_tts_job` for that. Raises
-    credits.InsufficientCreditsError before anything is queued if the user
-    can't afford the estimated cost; raises ValueError if voice_id/voice_model_id
-    doesn't resolve to a real, owned voice; raises EnqueueError if the job
-    couldn't be handed to the queue (credits already released in that case).
+    """Create a pending TTS job and hold credits (ADR 0014) — does not call
+    a provider; see `execute_tts_job` for that. Raises
+    credits.InsufficientCreditsError before anything is committed if the
+    user can't afford the estimated cost; raises ValueError if
+    voice_id/voice_model_id doesn't resolve to a real, owned voice.
 
     Which provider a job routes to is decided by the voice, not the
     capability — exactly one of two kinds of voice is given (schemas.TTSRequest
@@ -159,7 +158,7 @@ async def submit_tts(
     job.hold_id = credit_hold.id
     await db.commit()
 
-    await _enqueue_or_fail(db, job=job, credit_hold=credit_hold, function="run_tts_job")
+    await pg_queue.notify_job_ready(db)
     return job
 
 
@@ -172,9 +171,9 @@ async def submit_voice_model_training(
     audio_filename: str,
     reference_text: str | None = None,
 ) -> Job:
-    """Create a pending voice-cloning job (ADR 0009), hold (0) credits, and
-    enqueue it (ADR 0014) — same split as `submit_tts`, see `execute_voice_model_training_job`
-    for the part that actually calls Fish Audio.
+    """Create a pending voice-cloning job (ADR 0009) and hold (0) credits —
+    same split as `submit_tts`, see `execute_voice_model_training_job` for
+    the part that actually calls Fish Audio.
 
     Fish Audio only for now (the only provider this product has a verified
     cloning integration against — ADR 0009's own open item on Azure/Google
@@ -188,10 +187,12 @@ async def submit_voice_model_training(
     trail (credit_transactions rows) and no-charge-on-failure guarantee as
     every other capability, for free (pun intended).
 
-    The audio bytes are passed through the queue payload as-is (unlike
-    `submit_tts`, there's no DB row to re-derive them from later) — arq's
-    default (pickle) serializer handles `bytes` fine; this is a short
-    recording (`routes_voice_models.py` caps it at 15MB), not a concern."""
+    **Since ADR 0026**: the audio is base64-encoded straight into `job.input`
+    (JSONB) rather than passed through a queue payload — there's no queue
+    payload anymore, a `pending` row is the only thing that exists between
+    submission and pickup. Base64 costs ~33% size overhead, accepted as
+    trivial at the 15MB cap `routes_voice_models.py` already enforces
+    (~20MB stored, nowhere near a real Postgres/JSONB size concern)."""
     estimated_cost = 0
 
     job = Job(
@@ -199,7 +200,12 @@ async def submit_voice_model_training(
         capability="voice_model_training",
         provider="fish_audio",
         status="pending",
-        input={"title": title, "reference_text": reference_text},
+        input={
+            "title": title,
+            "reference_text": reference_text,
+            "audio_b64": base64.b64encode(audio_bytes).decode("ascii"),
+            "audio_filename": audio_filename,
+        },
         estimated_cost=estimated_cost,
     )
     db.add(job)
@@ -209,14 +215,7 @@ async def submit_voice_model_training(
     job.hold_id = credit_hold.id
     await db.commit()
 
-    await _enqueue_or_fail(
-        db,
-        job=job,
-        credit_hold=credit_hold,
-        function="run_voice_model_training_job",
-        audio_bytes=audio_bytes,
-        audio_filename=audio_filename,
-    )
+    await pg_queue.notify_job_ready(db)
     return job
 
 
@@ -229,9 +228,9 @@ async def submit_kie_job(
     uploaded_r2_keys: list[str] | None = None,
     visibility: str = "private",
 ) -> Job:
-    """Create a pending Kie job, hold credits, and enqueue the *submit-only*
-    task (ADR 0014/0015) — `queue:kie-submit`, not one of the per-provider
-    queues above, since this task only ever calls Kie's createTask and
+    """Create a pending Kie job and hold credits — the *submit-only* work
+    (ADR 0014/0015) happens later, once a worker claims this row and calls
+    `execute_kie_submit_job`, which only ever calls Kie's createTask and
     returns; it never waits for Kie to actually finish (that's the whole
     point of splitting "submit" from "track to completion" — see
     `execute_kie_submit_job`/`finalize_kie_job` and architecture.md §3f).
@@ -245,8 +244,7 @@ async def submit_kie_job(
     contains real, live URLs (from `POST /kie/uploads`, called by the
     frontend before this) — these are the matching R2 keys, tracked here
     only so `cleanup_kie_uploads` can delete them once this job reaches a
-    terminal state (or fails to even enqueue, below). Empty for a
-    text-to-image job.
+    terminal state. Empty for a text-to-image job.
 
     `provider_model_id`/`fixed_inputs` (ADR 0017): `model_id` is our own
     catalog's id, not always what's literally sent to Kie (Veo 3.1's three
@@ -282,11 +280,7 @@ async def submit_kie_job(
     job.hold_id = credit_hold.id
     await db.commit()
 
-    try:
-        await _enqueue_or_fail(db, job=job, credit_hold=credit_hold, function="run_kie_submit_job")
-    except EnqueueError:
-        await cleanup_kie_uploads(job)
-        raise
+    await pg_queue.notify_job_ready(db)
     return job
 
 
@@ -307,32 +301,15 @@ async def cleanup_kie_uploads(job: Job) -> None:
             logger.warning("Failed to clean up Kie upload %s", r2_key, exc_info=True)
 
 
-async def _enqueue_or_fail(
-    db: AsyncSession, *, job: Job, credit_hold: CreditHold, function: str, **kwargs: Any
-) -> None:
-    """Shared by both `submit_*` functions — ADR 0014's "enqueue failure is
-    a first-class error path": if Redis is unreachable, release the hold
-    and mark the job failed immediately rather than leaving it `pending`
-    with credits locked and nothing that will ever pick it up."""
-    queue_name = queue_service.QUEUE_NAMES[job.provider]
-    try:
-        await queue_service.enqueue(function, job_id=str(job.id), queue_name=queue_name, **kwargs)
-    except Exception as exc:
-        await credits.release(db, credit_hold)
-        job.status = "failed"
-        job.error = f"Could not queue this job: {exc}"
-        job.completed_at = datetime.now(UTC)
-        await db.commit()
-        raise EnqueueError(str(exc)) from exc
-
-
 class TransientProviderError(Exception):
     """Raised by `execute_*_job` instead of writing a final `failed` state,
     when a provider call failed in a way that looks transient (a network
     timeout, connection error, or 5xx — see `_is_transient_error`) and
-    retries remain. `worker/tasks.py` catches this and turns it into arq's
-    own `Retry`, which is the only place this codebase depends on arq's
-    retry mechanism directly — this module stays queue-agnostic."""
+    retries remain. `worker/dispatcher.py` catches this, increments
+    `job.tries`, and reschedules the row (`status` back to `pending`,
+    `run_after` set to a backoff delay) — the direct replacement for arq's
+    own `Retry`, which is what this exception mapped to before ADR 0026.
+    This module stays queue-mechanism-agnostic either way."""
 
 
 def _is_transient_error(error: str | None) -> bool:
@@ -353,8 +330,8 @@ def _is_transient_error(error: str | None) -> bool:
 
 
 # How many total attempts (first try + retries) a transient provider failure
-# gets before it's written as a final `failed` — matched by the `max_tries`
-# arq's Function wrapper is given for these tasks (`worker/tasks.py`).
+# gets before it's written as a final `failed` — matched by
+# `worker/dispatcher.py`'s own reschedule-vs-give-up check.
 MAX_PROVIDER_TRIES = 3
 
 
@@ -364,7 +341,9 @@ async def execute_tts_job(
     """The part of TTS submission that used to run inline before ADR 0014:
     resolve the voice again from the job's own stored `input`, call the
     provider, settle or release credits, write the terminal state. Called
-    by an arq worker task (`worker/tasks.py`) with its own DB session.
+    by the dispatcher (`worker/dispatcher.py`) with its own DB session,
+    after already claiming the row (`status` is already `processing` by
+    the time this runs — the claim step owns that transition, ADR 0026).
 
     Returns `None` if the job or its hold has vanished by the time a worker
     picks it up — shouldn't happen in practice (nothing deletes a pending
@@ -374,17 +353,21 @@ async def execute_tts_job(
     state) when the provider call looks like a transient failure and
     `job_try` hasn't reached `MAX_PROVIDER_TRIES` yet — see
     `_is_transient_error`'s docstring for what counts. The job is left in
-    `processing` in that case, credits still held, for the worker's retry
-    to pick back up.
+    `processing` in that case, credits still held, for the dispatcher's
+    retry-reschedule to pick back up.
 
-    A real, live-caught case for the terminal-status check below: arq's
-    delivery guarantee is *at-least-once*, not exactly-once — a worker that
-    crashes (e.g. the documented Redis-connection-drop crash, `backend/
-    README.md`) after this function's own work already committed
-    successfully, but before arq itself finishes acknowledging the task,
-    redelivers the *same already-succeeded* job on restart. Without this
-    guard that meant calling the vendor a second time for real — observed
-    for a Kie job, not hypothetical."""
+    The terminal-status check below used to be load-bearing under arq
+    (ADR 0014): arq's delivery guarantee was *at-least-once*, and a real
+    worker crash — between this function's own commit and arq separately
+    acknowledging the task in Redis — really did redeliver an
+    already-succeeded job once (`backend/README.md`), calling a vendor a
+    second time for real. **Under ADR 0026's `SELECT ... FOR UPDATE SKIP
+    LOCKED` claim, that specific failure mode is gone** — a row can't be
+    claimed again once it's no longer `pending`, by this or any other
+    dispatcher process, so nothing re-delivers an already-terminal job the
+    way arq's own bookkeeping could. This check is kept anyway as cheap,
+    still-correct defensive insurance (it costs one extra `if`), not
+    because a live path to trigger it is known to still exist."""
     job = await db.get(Job, job_id)
     if job is None:
         return None
@@ -394,9 +377,6 @@ async def execute_tts_job(
     credit_hold = await db.get(CreditHold, job.hold_id) if job.hold_id else None
     if credit_hold is None:
         return None
-
-    job.status = "processing"
-    await db.commit()
 
     text = job.input["text"]
     speed = job.input.get("speed", 1.0)
@@ -462,12 +442,7 @@ async def execute_tts_job(
 
 
 async def execute_voice_model_training_job(
-    db: AsyncSession,
-    job_id: uuid.UUID,
-    *,
-    audio_bytes: bytes,
-    audio_filename: str,
-    job_try: int = 1,
+    db: AsyncSession, job_id: uuid.UUID, *, job_try: int = 1
 ) -> Job | None:
     """The part of voice-cloning submission that used to run inline before
     ADR 0014 — same shape as `execute_tts_job`, for `voice_model_training`.
@@ -477,10 +452,15 @@ async def execute_voice_model_training_job(
     API: the model is already `state: "trained"` in the same response that
     creates it, no separate polling step needed here.
 
-    Terminal-status guard: see `execute_tts_job`'s docstring — arq can
-    redeliver an already-succeeded job if a worker crashes between this
-    function's own commit and arq's own delivery acknowledgment; without
-    this, a redelivery would train a second real Fish Audio model."""
+    **Since ADR 0026**: no longer takes `audio_bytes`/`audio_filename` as
+    parameters — there's no queue payload to carry them in anymore, so
+    `submit_voice_model_training` base64-encodes the audio straight into
+    `job.input`, and this function decodes it back out, same "everything
+    needed to execute lives on the row" shape `execute_tts_job` already had.
+
+    Terminal-status guard: see `execute_tts_job`'s docstring — kept as
+    defensive insurance, though ADR 0026's `SKIP LOCKED` claim removes the
+    specific arq-redelivery path that used to make this load-bearing."""
     job = await db.get(Job, job_id)
     if job is None:
         return None
@@ -494,11 +474,10 @@ async def execute_voice_model_training_job(
     if credit_hold is None:
         return None
 
-    job.status = "processing"
-    await db.commit()
-
     title = job.input["title"]
     reference_text = job.input.get("reference_text")
+    audio_bytes = base64.b64decode(job.input["audio_b64"])
+    audio_filename = job.input["audio_filename"]
 
     provider = get_provider_by_name("fish_audio")
     job_ref: JobRef = await provider.submit(
@@ -532,12 +511,18 @@ async def execute_voice_model_training_job(
         job.completed_at = datetime.now(UTC)
         job.voice_model_id = voice_model.id
         job.output = {"voice_model_id": str(voice_model.id)}
+        # The base64 sample was only ever needed to reach this point — drop
+        # it now rather than let a ~20MB-ish blob sit in every completed
+        # training job's row forever (reassigned, not mutated in place, so
+        # SQLAlchemy's change tracking actually notices the JSONB update).
+        job.input = {k: v for k, v in job.input.items() if k != "audio_b64"}
         await publish_job_event(job)
     elif job_ref.status == "failed":
         if job_try < MAX_PROVIDER_TRIES and _is_transient_error(job_ref.error):
             await db.commit()
             raise TransientProviderError(job_ref.error)
         await _complete_failure(db, job=job, credit_hold=credit_hold, error=job_ref.error)
+        job.input = {k: v for k, v in job.input.items() if k != "audio_b64"}
     else:
         # Fast-mode training is synchronous (verified) — this branch exists
         # only for interface parity with ADR 0002's async-provider shape.
@@ -562,15 +547,14 @@ async def execute_kie_submit_job(
     not terminal. The real redelivery signal is `provider_job_id` already
     being set: that's this function's one real side effect (an actual
     `createTask` call), so once it exists there is nothing left for a
-    redelivered attempt to safely do. Live-caught, not hypothetical: a
-    worker crash between this function's commit and arq's own delivery
-    acknowledgment (the same documented Redis-connection-drop crash,
-    `backend/README.md`) redelivered an already-submitted job, which
+    redelivered attempt to safely do. Live-caught under arq (ADR 0014), not
+    hypothetical: a worker crash between this function's commit and arq's
+    own delivery acknowledgment redelivered an already-submitted job, which
     without this guard created a second real Kie video generation and
-    clobbered the first one's `provider_job_id` in the DB — the first
-    job's own result was still safe (already mirrored to R2 by the time
-    this happened), but a job re-delivered *before* finishing would have
-    lost track of its real, in-flight Kie task entirely."""
+    clobbered the first one's `provider_job_id` in the DB. **ADR 0026's
+    `SKIP LOCKED` claim removes that specific arq-redelivery path** (see
+    `execute_tts_job`'s docstring) — this check stays as defensive
+    insurance, same reasoning as there."""
     job = await db.get(Job, job_id)
     if job is None:
         return None
@@ -583,9 +567,6 @@ async def execute_kie_submit_job(
     credit_hold = await db.get(CreditHold, job.hold_id) if job.hold_id else None
     if credit_hold is None:
         return None
-
-    job.status = "processing"
-    await db.commit()
 
     # ADR 0017: `provider_model_id` (what Kie itself calls it) can differ
     # from `model_id` (our own catalog id) — always the former for the

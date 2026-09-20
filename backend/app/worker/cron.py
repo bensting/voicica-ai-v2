@@ -1,19 +1,17 @@
-"""arq cron jobs (ADR 0014) — periodic, non-request-triggered work, run by
-a dedicated worker process (`CronWorker` below) so a cron tick never
-competes with a provider queue's own `max_jobs` for concurrency (see
-`docs/architecture.md` §3f — this is also what resolves ADR 0007's
+"""Periodic, non-request-triggered work (ADR 0007) — run as plain timer
+loops inside `worker/dispatcher.py` (ADR 0026), not queue-driven, so a
+sweep tick never competes with a provider job's own concurrency semaphore
+(see `docs/architecture.md` §3f — this is also what resolves ADR 0007's
 previously-open "scheduling mechanism" question).
 """
 
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any, ClassVar
+from typing import Any
 
-from arq import cron
 from sqlalchemy import select
 
 from app.core.db import async_session_factory
-from app.core.queue import WORKER_POLL_DELAY_SECONDS, redis_settings
 from app.models.models import CreditHold, Job
 from app.providers.registry import get_provider_by_name
 from app.services import credits, jobs
@@ -95,23 +93,8 @@ async def sweep_kie_processing_jobs(ctx: dict[str, Any]) -> int:
     return resolved
 
 
-class CronWorker:
-    """No `functions` of its own to consume from a provider queue — this
-    process exists only to tick cron jobs on a timer, run as:
-    `arq app.worker.cron.CronWorker`."""
-
-    functions: ClassVar[list] = []
-    cron_jobs: ClassVar[list] = [
-        cron(sweep_stuck_jobs, minute=set(range(0, 60, 5))),  # every 5 min
-        cron(sweep_kie_processing_jobs, minute=set(range(60))),  # every 1 min
-    ]
-    queue_name = "queue:cron"
-    redis_settings = redis_settings()
-    # Same rationale as the provider workers (app/core/queue.py) — this
-    # process has no queue to react to quickly, just a clock to watch, so
-    # there's even less reason for it to poll at arq's 0.5s default. arq
-    # tracks each cron job's own next-due minute internally and fires it
-    # exactly once when that minute arrives regardless of poll_delay, as
-    # long as poll_delay stays well under 60s — 5s doesn't cost this any
-    # scheduling accuracy, only cuts its idle Redis chatter by ~10x.
-    poll_delay = WORKER_POLL_DELAY_SECONDS
+## Since ADR 0026, both sweeps above run as plain `asyncio.sleep()` timer
+## loops inside `worker/dispatcher.py` (`_sweep_loop`, every 5 and 1 minutes
+## respectively) instead of arq's `cron()` — they were always "wake on the
+## clock regardless" work, never queue-driven, so moving off arq changes
+## nothing about how they're scheduled, only who calls them.

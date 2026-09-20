@@ -18,6 +18,17 @@ class Settings(BaseSettings):
     # this being a separate, explicit switch rather than inferred from the URL.
     database_url: str = "postgresql+asyncpg://voicica:voicica@localhost:5432/voicica"
     database_ssl_require: bool = False
+    # ADR 0026 — the job dispatcher's single LISTEN connection needs a real,
+    # non-pooled connection: verified live against Neon that LISTEN/NOTIFY
+    # silently doesn't work over its pooler endpoint (a notification sent on
+    # one pooled connection never reaches a listener on another, since the
+    # pooler can hand out a different backend connection per transaction —
+    # there's nothing to "fail" on, so this isn't a bug that throws, it's a
+    # notification that just never arrives). Falls back to `database_url`
+    # for local dev against a plain, unpooled Postgres, where the
+    # distinction doesn't exist. Plain `asyncpg` DSN format (no `+asyncpg`
+    # driver prefix) — this one connects via raw asyncpg, not SQLAlchemy.
+    database_direct_url: str | None = None
 
     # Auth (ADR 0008) — Firebase Admin SDK service account, as a path to the JSON
     # key file or the JSON itself. core/auth.py is the only place that reads this.

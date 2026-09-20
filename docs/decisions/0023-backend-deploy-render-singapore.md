@@ -3,6 +3,8 @@
 - Status: Accepted
 - Date: 2026-09-15
 
+**Entrypoint renamed since [ADR 0026](0026-postgres-native-job-queue.md)**: every `python -m app.worker.run_all` reference below is now `python -m app.worker.dispatcher` (also needs a new `DATABASE_DIRECT_URL` env var — `backend/README.md`'s Deploy table has the current, authoritative command/env-var list). The region/service-type/deploy-mechanics decisions this ADR actually makes are otherwise untouched.
+
 ## Context
 
 The backend had never been deployed anywhere public — local-dev-only, `PUBLIC_BASE_URL` (Kie's webhook callback target) left blank the whole time for exactly that reason. `frontend/web` went live first (ADR 0022, Cloudflare Workers) for a narrower, specific reason (a payment-gateway application needing a real `/contact` page); the backend catching up is what makes `(app)`/`(admin)` — everything actually gated by login — work on the live domain.

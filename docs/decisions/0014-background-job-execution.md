@@ -3,6 +3,8 @@
 - Status: Accepted
 - Date: 2026-09-12
 
+**Partially superseded by [ADR 0026](0026-postgres-native-job-queue.md)**: the *queue mechanism* below (Redis + arq, per-provider queues, arq's own retry/timeout) was replaced by a Postgres-native queue (`SELECT ... FOR UPDATE SKIP LOCKED` + `LISTEN`/`NOTIFY`) once running it continuously made arq's structural reliance on polling too expensive against Upstash's free tier. Everything else this ADR decided is untouched and still accurate: the submit/execute split, one job per DB row, per-provider concurrency limits (now enforced by in-process semaphores instead of separate queues, same numbers), and the credit hold/settle/release lifecycle around each job.
+
 ## Context
 
 Today, `services/jobs.py`'s `submit_tts()`/`submit_voice_model_training()` run entirely inside the request handler: create the `Job` row, hold credits, then `await provider.submit(...)` — the actual HTTP call to Azure/Google/Fish Audio — and only return once that call finishes. [ADR 0002](0002-unified-async-job-model.md) already anticipated this as one *possible* shape ("the adapter's `submit` performs the work inline... by the time the API responds"), but two things became concrete evidence this doesn't scale, not just a latency curiosity:

@@ -1,5 +1,5 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="Worker - Google" type="PythonConfigurationType" factoryName="Python">
+  <configuration default="false" name="Worker - Dispatcher" type="PythonConfigurationType" factoryName="Python">
     <module name="voicica-ai-v2" />
     <option name="INTERPRETER_OPTIONS" value="" />
     <option name="PARENT_ENVS" value="true" />
@@ -11,8 +11,8 @@
     <option name="IS_MODULE_SDK" value="true" />
     <option name="ADD_CONTENT_ROOTS" value="true" />
     <option name="ADD_SOURCE_ROOTS" value="true" />
-    <option name="SCRIPT_NAME" value="arq" />
-    <option name="PARAMETERS" value="app.worker.settings.GoogleWorker" />
+    <option name="SCRIPT_NAME" value="app.worker.dispatcher" />
+    <option name="PARAMETERS" value="" />
     <option name="SHOW_COMMAND_LINE" value="false" />
     <option name="EMULATE_TERMINAL" value="true" />
     <option name="MODULE_MODE" value="true" />

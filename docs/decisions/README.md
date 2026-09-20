@@ -62,3 +62,4 @@ What this makes easier, what it makes harder, what it locks in.
 | [0023](0023-backend-deploy-render-singapore.md) | Backend deployed to Render, Singapore region | Accepted |
 | [0024](0024-credit-purchases-stripe-checkout.md) | Credit purchases via Stripe Checkout, one-time only | Accepted |
 | [0025](0025-separate-test-database.md) | Local dev/testing gets its own database, reversing ADR 0023's "one shared DB" | Accepted |
+| [0026](0026-postgres-native-job-queue.md) | Job queue moves to Postgres (SKIP LOCKED + LISTEN/NOTIFY), replacing arq/Redis for dispatch | Accepted |

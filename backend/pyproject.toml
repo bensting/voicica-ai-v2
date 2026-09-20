@@ -15,7 +15,7 @@ dependencies = [
     "firebase-admin>=6.5",
     "boto3>=1.35",
     "python-multipart>=0.0.9",
-    "arq>=0.26",
+    "arq>=0.26",  # ADR 0026: kept only for arq.connections' Redis client (core/queue.py's pub/sub pool) — its queue engine is no longer used
     "stripe>=11.0",
 ]
 

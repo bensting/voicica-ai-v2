@@ -111,6 +111,18 @@ class Job(Base):
     )
     visibility: Mapped[str] = mapped_column(String(8), default="private")  # private | public (ADR 0010)
 
+    # ADR 0026 — replace arq's own in-memory retry counter and delayed-
+    # requeue scheduling now that the queue itself is a plain `jobs` row,
+    # not an arq/Redis entry. `tries` starts at 0 (nothing attempted yet);
+    # the dispatcher claims a row and calls execute_*_job with
+    # `job_try=job.tries + 1`, matching arq's old 1-indexed `ctx["job_try"]`.
+    # `run_after` is NULL for "claimable right away" — set to a future
+    # timestamp only when a transient-error retry is scheduled with a
+    # backoff delay (worker/dispatcher.py), the direct replacement for
+    # arq's own delayed-retry sorted-set scheduling.
+    tries: Mapped[int] = mapped_column(Integer, default=0)
+    run_after: Mapped[datetime | None] = mapped_column(_TZ, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(_TZ, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(_TZ, server_default=func.now(), onupdate=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(_TZ, nullable=True)
